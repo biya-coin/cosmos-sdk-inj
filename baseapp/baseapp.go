@@ -23,6 +23,7 @@ import (
 	"cosmossdk.io/log"
 	"cosmossdk.io/store"
 	storemetrics "cosmossdk.io/store/metrics"
+	"cosmossdk.io/store/rootmulti"
 	"cosmossdk.io/store/snapshots"
 	storetypes "cosmossdk.io/store/types"
 
@@ -74,7 +75,6 @@ type BaseApp struct {
 	cms               storetypes.CommitMultiStore // Main (uncached) state
 	qms               storetypes.MultiStore       // Optional alternative multistore for querying only.
 	mtx               sync.RWMutex                // global ABCI mutex to handle concurrency in app (after switching to Comet unsync ABCI client)
-	checkTxMtx        sync.RWMutex                // global ABCI mutex to handle concurrency between parallel CheckTx and Commit calls (to make CheckTx actually parallel to other ABCI calls)
 	storeLoader       StoreLoader                 // function to handle store loading, may be overridden with SetStoreLoader()
 	grpcQueryRouter   *GRPCQueryRouter            // router for redirecting gRPC query calls
 	msgServiceRouter  *MsgServiceRouter           // router for redirecting Msg service messages
@@ -509,7 +509,18 @@ func (app *BaseApp) setState(mode execMode, h cmtproto.Header) {
 
 	switch mode {
 	case execModeCheck:
-		baseState.SetContext(baseState.Context().WithIsCheckTx(true).WithMinGasPrices(app.minGasPrices).WithValue(AnteMutexes, &sync.Map{}))
+		// load new IAVL MutableTree with the same version as app.cms to allow parallel reads and writes of block execution and CheckTx
+		copyMs, err := app.cms.(*rootmulti.Store).Copy()
+		if err != nil {
+			panic(err)
+		}
+		cms := copyMs.CacheMultiStore()
+		baseState.SetContext(
+			baseState.Context().
+				WithIsCheckTx(true).
+				WithMinGasPrices(app.minGasPrices).
+				WithValue(AnteMutexes, &sync.Map{}).
+				WithMultiStore(cms))
 		app.checkState = baseState
 
 	case execModePrepareProposal:

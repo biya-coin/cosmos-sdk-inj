@@ -356,10 +356,9 @@ func (app *BaseApp) ApplySnapshotChunk(req *abci.RequestApplySnapshotChunk) (*ab
 // internal CheckTx state if the AnteHandler passes. Otherwise, the ResponseCheckTx
 // will contain relevant error information. Regardless of tx execution outcome,
 // the ResponseCheckTx will contain relevant gas execution context.
+//
+// We do not hold any lock here since CheckTx and Commit are synchronized via mempool mutex
 func (app *BaseApp) CheckTx(req *abci.RequestCheckTx) (*abci.ResponseCheckTx, error) {
-	app.checkTxMtx.RLock()
-	defer app.checkTxMtx.RUnlock()
-
 	var mode execMode
 
 	switch {
@@ -978,8 +977,6 @@ func (app *BaseApp) checkHalt(height int64, time time.Time) error {
 // height.
 func (app *BaseApp) Commit() (*abci.ResponseCommit, error) {
 	app.mtx.Lock()
-	app.checkTxMtx.Lock()
-	defer app.checkTxMtx.Unlock()
 	defer app.mtx.Unlock()
 
 	header := app.finalizeBlockState.Context().BlockHeader()

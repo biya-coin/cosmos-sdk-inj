@@ -102,6 +102,25 @@ func NewStore(db dbm.DB, logger log.Logger, metricGatherer metrics.StoreMetrics)
 	}
 }
 
+func (rs *Store) Copy() (*Store, error) {
+	copyRs := &Store{
+		db:                  rs.db,
+		logger:              rs.logger,
+		iavlCacheSize:       rs.iavlCacheSize,
+		iavlDisableFastNode: rs.iavlDisableFastNode,
+		storesParams:        rs.storesParams,
+		stores:              make(map[types.StoreKey]types.CommitKVStore),
+		keysByName:          rs.keysByName,
+		removalMap:          make(map[types.StoreKey]bool),
+		pruningManager:      pruning.NewManager(rs.db, rs.logger),
+		metrics:             rs.metrics,
+	}
+	if err := copyRs.LoadLatestVersion(); err != nil {
+		return nil, err
+	}
+	return copyRs, nil
+}
+
 func (rs *Store) GetCommitSync() bool {
 	return rs.commitSync
 }
