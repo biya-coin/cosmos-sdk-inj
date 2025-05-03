@@ -955,8 +955,10 @@ func (app *BaseApp) runTx(mode execMode, txBytes []byte) (gInfo sdk.GasInfo, res
 		gasWanted = ctx.GasMeter().Limit()
 
 		if err != nil {
-			if mode == execModeReCheck {
-				// if the ante handler fails on recheck, we want to remove the tx from the mempool
+			if mode == execModeReCheck && !errors.Is(err, sdkerrors.ErrWrongSequence) {
+				// if the ante handler fails on recheck, we want to remove the tx from the mempool, unless it is ErrWrongSequence,
+				// due to the fact that it can be optimistic recheck. If it is a valid ErrWrongSequence,
+				// it will be removed by parity CheckTx anyway
 				if mempoolErr := app.mempool.Remove(tx); mempoolErr != nil {
 					return gInfo, nil, anteEvents, errors.Join(err, mempoolErr)
 				}
