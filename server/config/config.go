@@ -186,6 +186,7 @@ type (
 		Enabled     bool     `mapstructure:"enabled"`
 		SeedBrokers []string `mapstructure:"seed-brokers"`
 		TopicName   string   `mapstructure:"topic-name"`
+		ControlPort int      `mapstructure:"control-port"`
 	}
 )
 
@@ -269,9 +270,10 @@ func DefaultConfig() *Config {
 				StopNodeOnErr: true,
 			},
 			MQPub: MQPubConfig{
-				Enabled: false,
+				Enabled:     false,
 				SeedBrokers: []string{},
-				TopicName: "",
+				TopicName:   "",
+				ControlPort: 0,
 			},
 		},
 		Mempool: MempoolConfig{

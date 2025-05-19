@@ -246,6 +246,9 @@ seed-brokers = [{{ range .Streaming.MQPub.SeedBrokers }}{{ printf "%q, " . }}{{e
 # topic-name defines the to be connected when message gets published.
 topic-name = "{{ .Streaming.MQPub.TopicName }}"
 
+# control-port defines the server port for mq control
+control-port = {{ .Streaming.MQPub.ControlPort }}
+
 ###############################################################################
 ###                         Mempool                                         ###
 ###############################################################################
