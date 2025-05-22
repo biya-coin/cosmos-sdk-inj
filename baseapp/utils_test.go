@@ -116,6 +116,32 @@ func (m MsgKeyValueImpl) Set(ctx context.Context, msg *baseapptestutil.MsgKeyVal
 	return &baseapptestutil.MsgCreateKeyValueResponse{}, nil
 }
 
+var _ sdk.PublishEvent = (*TestPublishEvent)(nil)
+
+type TestPublishEvent struct {
+	Type       string            `json:"type,omitempty"`
+	Attributes map[string]string `json:"attributes,omitempty"`
+}
+
+func NewTestPublishEvent(typ string, attributes map[string]string) *TestPublishEvent {
+	return &TestPublishEvent{
+		Type:       typ,
+		Attributes: attributes,
+	}
+}
+
+func (b *TestPublishEvent) Serialize() []byte {
+	bz, err := json.Marshal(b)
+	if err != nil {
+		panic(err)
+	}
+	return bz
+}
+
+func (b *TestPublishEvent) ToString() string {
+	return fmt.Sprintf("%s: %s", b.Type, b.Attributes)
+}
+
 type CounterServerImplGasMeterOnly struct {
 	gas uint64
 }
@@ -146,20 +172,24 @@ type CounterServerImpl struct {
 	t          *testing.T
 	capKey     storetypes.StoreKey
 	deliverKey []byte
+
+	emitCustomEvent bool
 }
 
 func (m CounterServerImpl) IncrementCounter(ctx context.Context, msg *baseapptestutil.MsgCounter) (*baseapptestutil.MsgCreateCounterResponse, error) {
-	return incrementCounter(ctx, m.t, m.capKey, m.deliverKey, msg)
+	return incrementCounter(ctx, m.t, m.capKey, m.deliverKey, msg, m.emitCustomEvent)
 }
 
 type Counter2ServerImpl struct {
 	t          *testing.T
 	capKey     storetypes.StoreKey
 	deliverKey []byte
+	
+	emitCustomEvent bool
 }
 
 func (m Counter2ServerImpl) IncrementCounter(ctx context.Context, msg *baseapptestutil.MsgCounter2) (*baseapptestutil.MsgCreateCounterResponse, error) {
-	return incrementCounter(ctx, m.t, m.capKey, m.deliverKey, msg)
+	return incrementCounter(ctx, m.t, m.capKey, m.deliverKey, msg, m.emitCustomEvent)
 }
 
 func incrementCounter(ctx context.Context,
@@ -167,6 +197,7 @@ func incrementCounter(ctx context.Context,
 	capKey storetypes.StoreKey,
 	deliverKey []byte,
 	msg sdk.Msg,
+	emitCustomEvent bool,
 ) (*baseapptestutil.MsgCreateCounterResponse, error) {
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
 	store := sdkCtx.KVStore(capKey)
@@ -192,6 +223,12 @@ func incrementCounter(ctx context.Context,
 		counterEvent(sdk.EventTypeMessage, msgCount),
 	)
 
+	if emitCustomEvent {
+		sdkCtx.PublishEventManager().EmitEvent(
+			NewTestPublishEvent("message", map[string]string{"counter": fmt.Sprintf("%d", msgCount)}),
+		)
+	}
+
 	_, err := incrementingCounter(t, store, deliverKey, msgCount)
 	if err != nil {
 		return nil, err
@@ -210,6 +247,10 @@ func counterEvent(evType string, msgCount int64) sdk.Events {
 }
 
 func anteHandlerTxTest(t *testing.T, capKey storetypes.StoreKey, storeKey []byte) sdk.AnteHandler {
+	return anteHandlerTxTestWithCustomEventEmit(t, capKey, storeKey, false)
+}
+
+func anteHandlerTxTestWithCustomEventEmit(t *testing.T, capKey storetypes.StoreKey, storeKey []byte, emitCustomEvent bool) sdk.AnteHandler {
 	return func(ctx sdk.Context, tx sdk.Tx, simulate bool) (sdk.Context, error) {
 		store := ctx.KVStore(capKey)
 		counter, failOnAnte := parseTxMemo(t, tx)
@@ -226,6 +267,12 @@ func anteHandlerTxTest(t *testing.T, capKey storetypes.StoreKey, storeKey []byte
 		ctx.EventManager().EmitEvents(
 			counterEvent("ante_handler", counter),
 		)
+
+		if emitCustomEvent {
+			ctx.PublishEventManager().EmitEvent(
+				NewTestPublishEvent("ante_handler", map[string]string{"counter": fmt.Sprintf("%d", counter)}),
+			)
+		}
 
 		ctx = ctx.WithPriority(testTxPriority)
 		return ctx, nil
