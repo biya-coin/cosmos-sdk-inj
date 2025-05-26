@@ -2,11 +2,9 @@ package server
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -57,7 +55,7 @@ import (
 	servercmtlog "github.com/cosmos/cosmos-sdk/server/log"
 	"github.com/cosmos/cosmos-sdk/server/types"
 	"github.com/cosmos/cosmos-sdk/telemetry"
-	"github.com/cosmos/cosmos-sdk/types/bech32"
+	sdktypes "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/mempool"
 	"github.com/cosmos/cosmos-sdk/version"
 	genutiltypes "github.com/cosmos/cosmos-sdk/x/genutil/types"
@@ -120,6 +118,8 @@ const (
 	KeyNewValAddr            = "new-validator-addr"
 	KeyUserPubKey            = "user-pub-key"
 	KeyTriggerTestnetUpgrade = "trigger-testnet-upgrade"
+
+	defaultNewChainID = "injective-devnetify-1389"
 )
 
 type ExtendedValidator struct {
@@ -666,12 +666,7 @@ func startApp(svrCtx *Context, appCreator types.AppCreator, opts StartCmdOptions
 	}
 
 	if isTestnet, ok := svrCtx.Viper.Get(KeyIsTestnet).(bool); ok && isTestnet {
-
-		pubKey, ok := svrCtx.Viper.Get(KeyUserPubKey).(*sdked25519.PubKey)
-		if !ok {
-			return app, traceCleanupFn, errors.New("no public key found in server ctx, or its not an ed25519 public key")
-		}
-		validators, err := MockTestnetifyExtendedValidators(pubKey)
+		validators, err := MockTestnetifyExtendedValidators(svrCtx.Config)
 		if err != nil {
 			return app, traceCleanupFn, err
 		}
@@ -794,48 +789,18 @@ you want to test the upgrade handler itself.
 // Testnetify modifies both state and blockStore, allowing the provided operator address and local validator key to control the network
 // that the state in the data folder represents. The chainID of the local genesis file is modified to match the provided chainID.
 func Testnetify(ctx *Context, testnetAppCreator types.AppCreator, db dbm.DB, traceWriter io.WriteCloser, validators []ExtendedValidator) (types.Application, error) {
-	// Modify app genesis chain ID and save to genesis file.
-	// Create the codec and registry
-	interfaceRegistry := codectypes.NewInterfaceRegistry()
-
-	// Register the ed25519 PubKey type
-	var pkI *cryptotypes.PubKey
-	interfaceRegistry.RegisterInterface("cosmos.crypto.PubKey", pkI)
-	interfaceRegistry.RegisterImplementations(pkI, &sdked25519.PubKey{})
-
-	// Also register the PrivKey
-	var privI *cryptotypes.PrivKey
-	interfaceRegistry.RegisterInterface("cosmos.crypto.PrivKey", privI)
-	interfaceRegistry.RegisterImplementations(privI, &sdked25519.PrivKey{})
-
-	cdc := codec.NewProtoCodec(interfaceRegistry)
-
-	// Unpack every validator
-	for i := range validators {
-		if err := validators[i].UnpackInterfaces(cdc.InterfaceRegistry()); err != nil {
-			return nil, fmt.Errorf("failed to unpack interfaces: %w", err)
-		}
-	}
 
 	config := ctx.Config
+	newChainID, ok := ctx.Viper.Get(KeyNewChainID).(string)
+	if !ok {
+		return nil, fmt.Errorf("expected string for key %s", KeyNewChainID)
+	}
+	if newChainID == "" {
+		newChainID = defaultNewChainID
+	}
 
 	if len(validators) == 0 {
 		return nil, fmt.Errorf("no validators provided")
-	}
-
-	// Modify app genesis chain ID and save to genesis file.
-	genFilePath := config.GenesisFile()
-	appGen, err := genutiltypes.AppGenesisFromFile(genFilePath)
-	if err != nil {
-		return nil, err
-	}
-	appGen.ChainID = "injective-1389"
-
-	if err := appGen.ValidateAndComplete(); err != nil {
-		return nil, err
-	}
-	if err := appGen.SaveAs(genFilePath); err != nil {
-		return nil, err
 	}
 
 	// Regenerate addrbook.json to prevent peers on old network from causing error logs.
@@ -866,17 +831,6 @@ func Testnetify(ctx *Context, testnetAppCreator types.AppCreator, db dbm.DB, tra
 
 	defer blockStore.Close()
 	defer stateDB.Close()
-
-	privValidator, err := pvm.LoadOrGenFilePV(config.PrivValidatorKeyFile(), config.PrivValidatorStateFile(), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	userPubKey, err := privValidator.GetPubKey()
-	if err != nil {
-		return nil, err
-	}
-	validatorAddress := userPubKey.Address()
 
 	stateStore := sm.NewStore(stateDB, sm.StoreOptions{
 		DiscardABCIResponses: config.Storage.DiscardABCIResponses,
@@ -942,13 +896,23 @@ func Testnetify(ctx *Context, testnetAppCreator types.AppCreator, db dbm.DB, tra
 	if block == nil {
 		return nil, fmt.Errorf("no block found at height %d", blockStore.Height())
 	}
-	block.ChainID = "injective-1389"
-	state.ChainID = "injective-1389"
-	genDoc.ChainID = "injective-1389"
+
+	block.ChainID = newChainID
+	state.ChainID = newChainID
+	genDoc.ChainID = newChainID
+
 	block.LastBlockID = state.LastBlockID
 	block.LastCommit.BlockID = state.LastBlockID
+	block.LastCommit.Height = blockStore.Height()
 
 	newValSet := &cmttypes.ValidatorSet{Validators: []*cmttypes.Validator{}}
+
+	totalValidators := len(validators)                          // e.g. 60
+	powerReduction := sdkmath.NewInt(1_000_000_000_000_000_000) // 10^18
+	totalVotingPower := int64(10000)
+	votingPowerPerValidator := totalVotingPower / int64(totalValidators)
+	var commitSigs []cmttypes.CommitSig
+	var seenCommitsSigs []cmttypes.CommitSig
 
 	for i, extVal := range validators {
 		// Get the tendermint pubkey from the validator
@@ -994,98 +958,69 @@ func Testnetify(ctx *Context, testnetAppCreator types.AppCreator, db dbm.DB, tra
 
 		// Modify the block's lastCommit to be signed only by our validator
 		// Instead of trying to extend existing signatures, just create a fresh signature array
-		block.LastCommit.Signatures = []cmttypes.CommitSig{
-			{
-				BlockIDFlag:      cmttypes.BlockIDFlagCommit,
-				ValidatorAddress: valAddress,
-				Signature:        vote.Signature,
-				Timestamp:        vote.Timestamp,
-			},
+		commitSig := cmttypes.CommitSig{
+			BlockIDFlag:      cmttypes.BlockIDFlagCommit,
+			ValidatorAddress: valAddress,
+			Signature:        vote.Signature,
+			Timestamp:        vote.Timestamp,
 		}
-
-		// Load the seenCommit of the lastBlockHeight and modify it to be signed from our validator
-		seenCommit := blockStore.LoadSeenCommit(state.LastBlockHeight)
-		if seenCommit == nil {
-			// If there's no seen commit, we can't proceed with this validator
-			continue
-		}
-
-		seenCommit.BlockID = state.LastBlockID
-		seenCommit.Round = vote.Round
+		commitSigs = append(commitSigs, commitSig)
 
 		// Just create a fresh signature array with one signature
-		seenCommit.Signatures = []cmttypes.CommitSig{
-			{
-				BlockIDFlag:      cmttypes.BlockIDFlagCommit,
-				ValidatorAddress: valAddress,
-				Signature:        vote.Signature,
-				Timestamp:        vote.Timestamp,
-			},
+		seenCommitSig := cmttypes.CommitSig{
+			BlockIDFlag:      cmttypes.BlockIDFlagCommit,
+			ValidatorAddress: valAddress,
+			Signature:        vote.Signature,
+			Timestamp:        vote.Timestamp,
 		}
+		seenCommitsSigs = append(seenCommitsSigs, seenCommitSig)
 
-		err = blockStore.SaveSeenCommit(state.LastBlockHeight, seenCommit)
-		if err != nil {
-			return nil, err
-		}
+		// To ensure Tokens field aligns with staking module (i.e., Tokens = VotingPower * PowerReduction)
+		tokensPerValidator := sdkmath.NewInt(votingPowerPerValidator).Mul(powerReduction)
+		extVal.Validator.Tokens = tokensPerValidator
 
-		powerReduction := sdkmath.NewInt(1_000_000_000_000_000_000) // 10^18
-		votingPower := extVal.Validator.Tokens.Quo(powerReduction).Int64()
-		// Create ValidatorSet struct containing just our valdiator.
 		newVal := &cmttypes.Validator{
 			Address:     valAddress,
 			PubKey:      pubKey,
-			VotingPower: votingPower,
+			VotingPower: votingPowerPerValidator,
 		}
+
 		newValSet.Validators = append(newValSet.Validators, newVal)
 	}
 	newValSet.Proposer = newValSet.Validators[0]
-
-	// Directly update the privval key file to match our validator - this ensures the node
-	// uses the exact same validator key for consensus
-	if len(validators) > 0 {
-		// Get the public key from our validator
-		pubKey, err := GetTmPubKeyFromExtendedValidator(validators[0])
-		if err != nil {
-			return nil, fmt.Errorf("failed to get validator pubkey for privval file update: %w", err)
-		}
-
-		// Load the private validator key
-		pvKeyFile := config.PrivValidatorKeyFile()
-		pvStateFile := config.PrivValidatorStateFile()
-		ctx.Logger.Info("Checking private validator files",
-			"keyFile", pvKeyFile,
-			"stateFile", pvStateFile,
-			"expected_validator_addr", fmt.Sprintf("%X", pubKey.Address()))
-
-		pv := pvm.LoadOrGenFilePV(pvKeyFile, pvStateFile)
-
-		// Log the loaded private validator details
-		pvPubKey, err := pv.GetPubKey()
-		if err != nil {
-			ctx.Logger.Error("Failed to get private validator pubkey", "err", err)
-		} else {
-			pvAddress := pvPubKey.Address()
-			ctx.Logger.Info("Loaded private validator",
-				"address", fmt.Sprintf("%X", pvAddress),
-				"pubkey", fmt.Sprintf("%X", pvPubKey.Bytes()))
-
-			// Check if the private validator address matches our expected validator address
-			if !bytes.Equal(pvAddress, pubKey.Address()) {
-				ctx.Logger.Error("Private validator address does not match expected validator address",
-					"pv_address", fmt.Sprintf("%X", pvAddress),
-					"expected_address", fmt.Sprintf("%X", pubKey.Address()))
-			} else {
-				ctx.Logger.Info("Private validator address matches expected validator address",
-					"address", fmt.Sprintf("%X", pvAddress))
-			}
-		}
-	}
 
 	// Replace all valSets in state to be the valSet with just our validator.
 	state.Validators = newValSet
 	state.LastValidators = newValSet
 	state.NextValidators = newValSet
 	state.LastHeightValidatorsChanged = blockStore.Height()
+	block.LastCommit.Signatures = commitSigs
+	// Load the seenCommit of the lastBlockHeight and modify it to be signed from our validator
+	seenCommit := blockStore.LoadSeenCommit(state.LastBlockHeight)
+	if seenCommit == nil {
+		// If there's no seen commit, we can't proceed with this validator
+		return nil, fmt.Errorf("no seen commit found for height %d", state.LastBlockHeight)
+	}
+
+	seenCommit.BlockID = state.LastBlockID
+	seenCommit.Round = 0
+	seenCommit.Signatures = seenCommitsSigs
+	seenCommit.Height = block.Height
+	// Fake last seen commit since we are starting from arbitrary height, This ensures the consensus engine doesn’t fail during the handshake or proposal step
+	err = blockStore.SaveSeenCommit(state.LastBlockHeight, seenCommit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to save seen commit: %w", err)
+	}
+
+	// We need to ensure that priv_validator_state.json is set to first round, this prevent cometbft from crashing
+	// In cases when we are copying a state from a previous network, that is alrady on round > 0
+	pv := pvm.LoadFilePV(config.PrivValidatorKeyFile(), config.PrivValidatorStateFile())
+	pv.LastSignState.Height = state.LastBlockHeight - 1
+	pv.LastSignState.Round = 0
+	pv.LastSignState.Step = 0
+	pv.LastSignState.Signature = nil
+	pv.LastSignState.SignBytes = nil
+	pv.Save()
 
 	err = stateStore.Save(state)
 	if err != nil {
@@ -1226,27 +1161,23 @@ func GetTmPubKeyFromExtendedValidator(ev ExtendedValidator) (tmcrypto.PubKey, er
 	return nil, fmt.Errorf("could not extract public key from validator")
 }
 
-func MockTestnetifyExtendedValidators(pubKey *sdked25519.PubKey) ([]ExtendedValidator, error) {
-	// Create Any type from the input pubKey
-	pubKeyAny, err := codectypes.NewAnyWithValue(pubKey)
+func MockTestnetifyExtendedValidators(cfg *cmtcfg.Config) ([]ExtendedValidator, error) {
+	// Load local node's priv validator key
+	privValidator := pvm.LoadFilePV(cfg.PrivValidatorKeyFile(), cfg.PrivValidatorStateFile())
+	pubKey, err := privValidator.GetPubKey()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get pubkey from priv validator: %w", err)
+	}
+	pubKeySdk := &sdked25519.PubKey{Key: pubKey.Bytes()}
+	validatorAddress := pubKey.Address().Bytes()
+	pubkeyAny, err := codectypes.NewAnyWithValue(pubKeySdk)
 	if err != nil {
 		return nil, err
 	}
-
-	// Get the validator operator address with injvaloper prefix
-	addressBytes := pubKey.Address().Bytes()
-	valAddr, err := bech32.ConvertAndEncode("injvaloper", addressBytes)
-	if err != nil {
-		return nil, err
-	}
-
-	// Create a placeholder private key - this is needed for the ExtendedValidator struct
-	// but won't be used for actual signing since we're using the node's private key
-	placeholderPrivKey := tmcryptoed25519.GenPrivKey()
 
 	validator := stakingtypes.Validator{
-		OperatorAddress: valAddr,
-		ConsensusPubkey: pubKeyAny,
+		OperatorAddress: sdktypes.ValAddress(validatorAddress).String(),
+		ConsensusPubkey: pubkeyAny,
 		Jailed:          false,
 		Status:          stakingtypes.Bonded,
 		Tokens:          sdkmath.NewInt(9000000000000000000),
@@ -1264,15 +1195,10 @@ func MockTestnetifyExtendedValidators(pubKey *sdked25519.PubKey) ([]ExtendedVali
 		MinSelfDelegation: sdkmath.OneInt(),
 	}
 
-	// Print validation info to confirm we're using the correct key
-	sdkPubKeyBytes := pubKey.Key
-	fmt.Printf("Using validator with pubkey: %X\n", sdkPubKeyBytes)
-	fmt.Printf("Validator operator address: %s\n", valAddr)
-
 	validators := []ExtendedValidator{
 		{
 			Validator: validator,
-			PrivKey:   placeholderPrivKey,
+			PrivKey:   privValidator.Key.PrivKey,
 		},
 	}
 	return validators, nil
