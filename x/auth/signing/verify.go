@@ -81,11 +81,12 @@ func VerifySignature(
 		if !pubKey.VerifySignature(signBytes, data.Signature) {
 			pubKeyBytes := pubKey.Bytes()
 			pubKeyAddress := pubKey.Address()
-			return fmt.Errorf("unable to verify single signer signature: pub_key_bytes=%s pub_key_address=%s signature=%s signer_address=%s",
+			return fmt.Errorf("unable to verify single signer signature: pub_key_bytes=%s pub_key_address=%s signature=%s signer_address=%s pub_key_type=%s",
 				hex.EncodeToString(pubKeyBytes),
 				pubKeyAddress.String(),
 				hex.EncodeToString(data.Signature),
 				signerData.Address,
+				signerData.PubKey.TypeUrl,
 			)
 		}
 		return nil
