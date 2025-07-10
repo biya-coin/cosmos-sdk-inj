@@ -91,16 +91,27 @@ func (spkd SetPubKeyDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate b
 		}
 		// Only make check if simulate=false
 		if !simulate && !bytes.Equal(pk.Address(), signers[i]) && ctx.IsSigverifyTx() {
-			pubKeyBytes := pubkeys[i].Bytes()
-			pubKeyAddress := pubkeys[i].Address()
-			pubKeyType := pubkeys[i].Type()
+			var (
+				pubKeyBytes        = hex.EncodeToString(pk.Bytes())
+				pubKeyAddress      = pk.Address().String()
+				signerAddress      = signerStrs[i]
+				signerAddressBytes = hex.EncodeToString(signers[i])
+			)
+
+			errMsg := "\n" +
+				"PUB_KEY\n" +
+				"pk_bytes: " + pubKeyBytes + "\n" +
+				"pk_address: " + pubKeyAddress + "\n" +
+				"pk_type: " + pk.Type() + "\n" +
+				"SIGNER\n" +
+				"signer_address: " + signerAddress + "\n" +
+				"signer_address_bytes: " + signerAddressBytes + "\n"
+
 			return ctx, errorsmod.Wrapf(sdkerrors.ErrInvalidPubKey,
-				"pubKey does not match signer address %s with signer index: %d (pk_bz=%s pk_addr=%s, pk_type=%s)",
+				"pubKey does not match signer address %s with signer index: %d (%s)",
 				signerStrs[i],
 				i,
-				hex.EncodeToString(pubKeyBytes),
-				pubKeyAddress.String(),
-				pubKeyType,
+				errMsg,
 			)
 		}
 

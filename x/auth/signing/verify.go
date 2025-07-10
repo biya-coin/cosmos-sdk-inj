@@ -95,8 +95,7 @@ func VerifySignature(
 				"sign_bytes: " + bytesToSign + "\n" +
 				"signature: " + signature + "\n" +
 				"SIGNER_DATA\n" +
-				"pk_type: " + signerData.PubKey.TypeUrl + "\n" +
-				"pk_string: " + signerData.PubKey.String() + "\n"
+				"pk_type: " + signerData.PubKey.TypeUrl + "\n"
 
 			return fmt.Errorf("unable to verify single signer signature: %s", errMsg)
 		}
