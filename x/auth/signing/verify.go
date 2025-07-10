@@ -79,15 +79,26 @@ func VerifySignature(
 			return err
 		}
 		if !pubKey.VerifySignature(signBytes, data.Signature) {
-			pubKeyBytes := pubKey.Bytes()
-			pubKeyAddress := pubKey.Address()
-			return fmt.Errorf("unable to verify single signer signature: pub_key_bytes=%s pub_key_address=%s signature=%s signer_address=%s pub_key_type=%s",
-				hex.EncodeToString(pubKeyBytes),
-				pubKeyAddress.String(),
-				hex.EncodeToString(data.Signature),
-				signerData.Address,
-				signerData.PubKey.TypeUrl,
+			var (
+				pubKeyBytes   = hex.EncodeToString(pubKey.Bytes())
+				pubKeyAddress = hex.EncodeToString(pubKey.Address())
+				bytesToSign   = hex.EncodeToString(signBytes)
+				signature     = hex.EncodeToString(data.Signature)
 			)
+
+			errMsg := "\n" +
+				"PUB_KEY\n" +
+				"pk_bytes: " + pubKeyBytes + "\n" +
+				"pk_address: " + pubKeyAddress + "\n" +
+				"pk_type: " + pubKey.Type() + "\n" +
+				"TX\n" +
+				"sign_bytes: " + bytesToSign + "\n" +
+				"signature: " + signature + "\n" +
+				"SIGNER_DATA\n" +
+				"pk_type: " + signerData.PubKey.TypeUrl + "\n" +
+				"pk_string: " + signerData.PubKey.String() + "\n"
+
+			return fmt.Errorf("unable to verify single signer signature: %s", errMsg)
 		}
 		return nil
 
