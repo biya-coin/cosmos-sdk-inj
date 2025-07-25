@@ -110,7 +110,7 @@ func (rs *Store) Copy() (*Store, error) {
 		iavlCacheSize:       rs.iavlCacheSize,
 		iavlDisableFastNode: rs.iavlDisableFastNode,
 		storesParams:        rs.storesParams,
-		stores:              make(map[types.StoreKey]types.CommitKVStore),
+		stores:              make(map[types.StoreKey]types.CommitStore),
 		keysByName:          rs.keysByName,
 		removalMap:          make(map[types.StoreKey]bool),
 		pruningManager:      pruning.NewManager(rs.db, rs.logger),
@@ -120,14 +120,6 @@ func (rs *Store) Copy() (*Store, error) {
 		return nil, err
 	}
 	return copyRs, nil
-}
-
-func (rs *Store) GetCommitSync() bool {
-	return rs.commitSync
-}
-
-func (rs *Store) SetCommitSync(sync bool) {
-	rs.commitSync = sync
 }
 
 // GetPruning fetches the pruning strategy from the root store.
