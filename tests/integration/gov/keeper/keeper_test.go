@@ -3,7 +3,7 @@ package keeper_test
 import (
 	"testing"
 
-	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
+	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v1"
 	"gotest.tools/v3/assert"
 
 	"cosmossdk.io/core/appmodule"
@@ -52,12 +52,16 @@ func initFixture(t testing.TB) *fixture {
 	keys := storetypes.NewKVStoreKeys(
 		authtypes.StoreKey, banktypes.StoreKey, distrtypes.StoreKey, stakingtypes.StoreKey, types.StoreKey,
 	)
-	tkey := storetypes.NewTransientStoreKey(banktypes.TStoreKey)
+	tkeys := storetypes.NewTransientStoreKeys(
+		banktypes.TStoreKey,
+	)
+	okeys := storetypes.NewObjectStoreKeys(
+		banktypes.ObjectStoreKey,
+	)
 	cdc := moduletestutil.MakeTestEncodingConfig(auth.AppModuleBasic{}, bank.AppModuleBasic{}, gov.AppModuleBasic{}).Codec
 
 	logger := log.NewTestLogger(t)
-	cms := integration.CreateMultiStore(keys, logger)
-	cms.MountStoreWithDB(tkey, storetypes.StoreTypeTransient, nil)
+	cms := integration.CreateMultiStore(keys, tkeys, okeys, logger)
 	if err := cms.LoadLatestVersion(); err != nil {
 		t.Fatalf("failed to load latest version: %v", err)
 	}
@@ -87,10 +91,12 @@ func initFixture(t testing.TB) *fixture {
 	blockedAddresses := map[string]bool{
 		accountKeeper.GetAuthority(): false,
 	}
+
 	bankKeeper := bankkeeper.NewBaseKeeper(
 		cdc,
 		runtime.NewKVStoreService(keys[banktypes.StoreKey]),
-		runtime.NewTransientKVStoreService(tkey),
+		runtime.NewTransientKVStoreService(tkeys[banktypes.TStoreKey]),
+		okeys[banktypes.ObjectStoreKey],
 		accountKeeper,
 		blockedAddresses,
 		authority.String(),
@@ -142,9 +148,6 @@ func initFixture(t testing.TB) *fixture {
 		distrtypes.ModuleName:   distrModule,
 		stakingtypes.ModuleName: stakingModule,
 		types.ModuleName:        govModule,
-	})
-	integrationApp.MountTransientStores(map[string]*storetypes.TransientStoreKey{
-		banktypes.TStoreKey: tkey,
 	})
 
 	sdkCtx := sdk.UnwrapSDKContext(integrationApp.Context())

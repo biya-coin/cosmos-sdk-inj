@@ -146,6 +146,7 @@ type SimApp struct {
 	// keys to access the substores
 	keys  map[string]*storetypes.KVStoreKey
 	tkeys map[string]*storetypes.TransientStoreKey
+	okeys map[string]*storetypes.ObjectStoreKey
 
 	// keepers
 	AccountKeeper         authkeeper.AccountKeeper
@@ -269,6 +270,7 @@ func NewSimApp(
 	}
 
 	tkeys := storetypes.NewTransientStoreKeys(paramstypes.TStoreKey, banktypes.TStoreKey)
+	okeys := storetypes.NewObjectStoreKeys(banktypes.ObjectStoreKey)
 	app := &SimApp{
 		BaseApp:           bApp,
 		legacyAmino:       legacyAmino,
@@ -277,6 +279,7 @@ func NewSimApp(
 		interfaceRegistry: interfaceRegistry,
 		keys:              keys,
 		tkeys:             tkeys,
+		okeys:             okeys,
 	}
 
 	app.ParamsKeeper = initParamsKeeper(appCodec, legacyAmino, keys[paramstypes.StoreKey], tkeys[paramstypes.TStoreKey])
@@ -292,6 +295,7 @@ func NewSimApp(
 		appCodec,
 		runtime.NewKVStoreService(keys[banktypes.StoreKey]),
 		runtime.NewTransientKVStoreService(tkeys[banktypes.TStoreKey]),
+		okeys[banktypes.ObjectStoreKey],
 		app.AccountKeeper,
 		BlockedAddresses(),
 		authtypes.NewModuleAddress(govtypes.ModuleName).String(),
@@ -466,6 +470,7 @@ func NewSimApp(
 		genutiltypes.ModuleName,
 		feegrant.ModuleName,
 		group.ModuleName,
+		banktypes.ModuleName,
 	)
 
 	// NOTE: The genutils module must occur after staking so that pools are
@@ -520,6 +525,7 @@ func NewSimApp(
 	// initialize stores
 	app.MountKVStores(keys)
 	app.MountTransientStores(tkeys)
+	app.MountObjectStores(okeys)
 
 	// initialize BaseApp
 	app.SetInitChainer(app.InitChainer)
@@ -601,7 +607,7 @@ func (app *SimApp) setPostHandler() {
 func (app *SimApp) Name() string { return app.BaseApp.Name() }
 
 // PreBlocker application updates every pre block
-func (app *SimApp) PreBlocker(ctx sdk.Context, _ *abci.RequestFinalizeBlock) (*sdk.ResponsePreBlock, error) {
+func (app *SimApp) PreBlocker(ctx sdk.Context, _ *abci.FinalizeBlockRequest) (*sdk.ResponsePreBlock, error) {
 	return app.ModuleManager.PreBlock(ctx)
 }
 
@@ -620,7 +626,7 @@ func (a *SimApp) Configurator() module.Configurator {
 }
 
 // InitChainer application update at chain initialization
-func (app *SimApp) InitChainer(ctx sdk.Context, req *abci.RequestInitChain) (*abci.ResponseInitChain, error) {
+func (app *SimApp) InitChainer(ctx sdk.Context, req *abci.InitChainRequest) (*abci.InitChainResponse, error) {
 	var genesisState GenesisState
 	if err := json.Unmarshal(req.AppStateBytes, &genesisState); err != nil {
 		panic(err)

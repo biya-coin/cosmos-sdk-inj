@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 
-	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
+	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v1"
 	"github.com/google/go-cmp/cmp"
 
 	"cosmossdk.io/core/appmodule"
@@ -37,7 +37,7 @@ func Example() {
 	// replace the logger by testing values in a real test case (e.g. log.NewTestLogger(t))
 	logger := log.NewNopLogger()
 
-	cms := integration.CreateMultiStore(keys, logger)
+	cms := integration.CreateMultiStore(keys, nil, nil, logger)
 	newCtx := sdk.NewContext(cms, cmtproto.Header{}, true, logger)
 
 	accountKeeper := authkeeper.NewAccountKeeper(
@@ -126,7 +126,7 @@ func Example_oneModule() {
 	// replace the logger by testing values in a real test case (e.g. log.NewTestLogger(t))
 	logger := log.NewLogger(io.Discard)
 
-	cms := integration.CreateMultiStore(keys, logger)
+	cms := integration.CreateMultiStore(keys, nil, nil, logger)
 	newCtx := sdk.NewContext(cms, cmtproto.Header{}, true, logger)
 
 	accountKeeper := authkeeper.NewAccountKeeper(

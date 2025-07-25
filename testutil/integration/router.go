@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	cmtabcitypes "github.com/cometbft/cometbft/abci/types"
-	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
+	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v1"
 	dbm "github.com/cosmos/cosmos-db"
 
 	"cosmossdk.io/core/appmodule"
@@ -60,14 +60,14 @@ func NewIntegrationApp(
 	bApp := baseapp.NewBaseApp(appName, logger, db, txConfig.TxDecoder(), append(baseAppOptions, baseapp.SetChainID(appName))...)
 	bApp.MountKVStores(keys)
 
-	bApp.SetInitChainer(func(_ sdk.Context, _ *cmtabcitypes.RequestInitChain) (*cmtabcitypes.ResponseInitChain, error) {
+	bApp.SetInitChainer(func(_ sdk.Context, _ *cmtabcitypes.InitChainRequest) (*cmtabcitypes.InitChainResponse, error) {
 		for _, mod := range modules {
 			if m, ok := mod.(module.HasGenesis); ok {
 				m.InitGenesis(sdkCtx, appCodec, m.DefaultGenesis(appCodec))
 			}
 		}
 
-		return &cmtabcitypes.ResponseInitChain{}, nil
+		return &cmtabcitypes.InitChainResponse{}, nil
 	})
 
 	bApp.SetBeginBlocker(func(_ sdk.Context) (sdk.BeginBlock, error) {
@@ -90,7 +90,7 @@ func NewIntegrationApp(
 			panic(fmt.Errorf("failed to load application version from store: %w", err))
 		}
 
-		if _, err := bApp.InitChain(&cmtabcitypes.RequestInitChain{ChainId: appName, ConsensusParams: simtestutil.DefaultConsensusParams}); err != nil {
+		if _, err := bApp.InitChain(&cmtabcitypes.InitChainRequest{ChainId: appName, ConsensusParams: simtestutil.DefaultConsensusParams}); err != nil {
 			panic(fmt.Errorf("failed to initialize application: %w", err))
 		}
 	} else {
@@ -98,7 +98,7 @@ func NewIntegrationApp(
 			panic(fmt.Errorf("failed to load application version from store: %w", err))
 		}
 
-		if _, err := bApp.InitChain(&cmtabcitypes.RequestInitChain{ChainId: appName}); err != nil {
+		if _, err := bApp.InitChain(&cmtabcitypes.InitChainRequest{ChainId: appName}); err != nil {
 			panic(fmt.Errorf("failed to initialize application: %w", err))
 		}
 	}
@@ -135,7 +135,7 @@ func (app *App) RunMsg(msg sdk.Msg, option ...Option) (*codectypes.Any, error) {
 
 	if cfg.AutomaticFinalizeBlock {
 		height := app.LastBlockHeight() + 1
-		if _, err := app.FinalizeBlock(&cmtabcitypes.RequestFinalizeBlock{Height: height}); err != nil {
+		if _, err := app.FinalizeBlock(&cmtabcitypes.FinalizeBlockRequest{Height: height}); err != nil {
 			return nil, fmt.Errorf("failed to run finalize block: %w", err)
 		}
 	}
@@ -178,12 +178,25 @@ func (app *App) QueryHelper() *baseapp.QueryServiceTestHelper {
 }
 
 // CreateMultiStore is a helper for setting up multiple stores for provided modules.
-func CreateMultiStore(keys map[string]*storetypes.KVStoreKey, logger log.Logger) storetypes.CommitMultiStore {
+func CreateMultiStore(
+	keys map[string]*storetypes.KVStoreKey,
+	tkeys map[string]*storetypes.TransientStoreKey,
+	okeys map[string]*storetypes.ObjectStoreKey,
+	logger log.Logger,
+) storetypes.CommitMultiStore {
 	db := dbm.NewMemDB()
 	cms := store.NewCommitMultiStore(db, logger, metrics.NewNoOpMetrics())
 
 	for key := range keys {
 		cms.MountStoreWithDB(keys[key], storetypes.StoreTypeIAVL, db)
+	}
+
+	for key := range tkeys {
+		cms.MountStoreWithDB(tkeys[key], storetypes.StoreTypeTransient, db)
+	}
+
+	for key := range okeys {
+		cms.MountStoreWithDB(okeys[key], storetypes.StoreTypeObject, db)
 	}
 
 	_ = cms.LoadLatestVersion()

@@ -3,6 +3,8 @@ package server
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -13,14 +15,14 @@ import (
 	"time"
 
 	"github.com/cometbft/cometbft/abci/server"
+	cmtstate "github.com/cometbft/cometbft/api/cometbft/state/v1"
+	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v1"
 	cmtcmd "github.com/cometbft/cometbft/cmd/cometbft/commands"
 	cmtcfg "github.com/cometbft/cometbft/config"
 	cmtjson "github.com/cometbft/cometbft/libs/json"
 	"github.com/cometbft/cometbft/node"
 	"github.com/cometbft/cometbft/p2p"
 	pvm "github.com/cometbft/cometbft/privval"
-	cmtstate "github.com/cometbft/cometbft/proto/tendermint/state"
-	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
 	"github.com/cometbft/cometbft/proxy"
 	rpchttp "github.com/cometbft/cometbft/rpc/client/http"
 	"github.com/cometbft/cometbft/rpc/client/local"
@@ -74,6 +76,7 @@ const (
 	FlagMinRetainBlocks     = "min-retain-blocks"
 	FlagIAVLCacheSize       = "iavl-cache-size"
 	FlagDisableIAVLFastNode = "iavl-disable-fastnode"
+	FlagIAVLSyncPruning     = "iavl-sync-pruning"
 	FlagShutdownGrace       = "shutdown-grace"
 
 	// state sync-related flags
@@ -261,7 +264,7 @@ func startStandAlone(svrCtx *Context, svrCfg serverconfig.Config, clientCtx clie
 	if svrCfg.API.Enable || svrCfg.GRPC.Enable {
 		// create tendermint client
 		// assumes the rpc listen address is where tendermint has its rpc server
-		rpcclient, err := rpchttp.New(svrCtx.Config.RPC.ListenAddress, "/websocket")
+		rpcclient, err := rpchttp.New(svrCtx.Config.RPC.ListenAddress)
 		if err != nil {
 			return err
 		}
@@ -374,11 +377,17 @@ func startCmtNode(
 		return nil, cleanupFn, err
 	}
 
+	// app.ValidatorKeyProvider() is passed to keyGenF argument in v0.52.0-rc2.
+	pv, err := pvm.LoadOrGenFilePV(cfg.PrivValidatorKeyFile(), cfg.PrivValidatorStateFile(), nil)
+	if err != nil {
+		return nil, cleanupFn, err
+	}
+
 	cmtApp := NewCometABCIWrapper(app)
-	tmNode, err = node.NewNodeWithContext(
+	tmNode, err = node.NewNode(
 		ctx,
 		cfg,
-		pvm.LoadOrGenFilePV(cfg.PrivValidatorKeyFile(), cfg.PrivValidatorStateFile()),
+		pv,
 		nodeKey,
 		proxy.NewLocalClientCreator(cmtApp),
 		getGenDocProvider(cfg),
@@ -415,15 +424,41 @@ func getAndValidateConfig(svrCtx *Context) (serverconfig.Config, error) {
 	return config, nil
 }
 
-// returns a function which returns the genesis doc from the genesis file.
-func getGenDocProvider(cfg *cmtcfg.Config) func() (*cmttypes.GenesisDoc, error) {
-	return func() (*cmttypes.GenesisDoc, error) {
+// getGenDocProvider returns a function which returns the genesis doc from the genesis file.
+func getGenDocProvider(cfg *cmtcfg.Config) func() (node.ChecksummedGenesisDoc, error) {
+	return func() (node.ChecksummedGenesisDoc, error) {
 		appGenesis, err := genutiltypes.AppGenesisFromFile(cfg.GenesisFile())
 		if err != nil {
-			return nil, err
+			return node.ChecksummedGenesisDoc{
+				Sha256Checksum: []byte{},
+			}, err
 		}
 
-		return appGenesis.ToGenesisDoc()
+		gen, err := appGenesis.ToGenesisDoc()
+		if err != nil {
+			return node.ChecksummedGenesisDoc{
+				Sha256Checksum: []byte{},
+			}, err
+		}
+		genbz, err := gen.AppState.MarshalJSON()
+		if err != nil {
+			return node.ChecksummedGenesisDoc{
+				Sha256Checksum: []byte{},
+			}, err
+		}
+
+		bz, err := json.Marshal(genbz)
+		if err != nil {
+			return node.ChecksummedGenesisDoc{
+				Sha256Checksum: []byte{},
+			}, err
+		}
+		sum := sha256.Sum256(bz)
+
+		return node.ChecksummedGenesisDoc{
+			GenesisDoc:     gen,
+			Sha256Checksum: sum[:],
+		}, nil
 	}
 }
 
@@ -611,7 +646,7 @@ func startApp(svrCtx *Context, appCreator types.AppCreator, opts StartCmdOptions
 	}
 
 	if isTestnet, ok := svrCtx.Viper.Get(KeyIsTestnet).(bool); ok && isTestnet {
-		app, err = testnetify(svrCtx, appCreator, db, traceWriter)
+		app, err = Testnetify(svrCtx, appCreator, db, traceWriter)
 		if err != nil {
 			return app, traceCleanupFn, err
 		}
@@ -726,9 +761,9 @@ you want to test the upgrade handler itself.
 	return cmd
 }
 
-// testnetify modifies both state and blockStore, allowing the provided operator address and local validator key to control the network
+// Testnetify modifies both state and blockStore, allowing the provided operator address and local validator key to control the network
 // that the state in the data folder represents. The chainID of the local genesis file is modified to match the provided chainID.
-func testnetify(ctx *Context, testnetAppCreator types.AppCreator, db dbm.DB, traceWriter io.WriteCloser) (types.Application, error) {
+func Testnetify(ctx *Context, testnetAppCreator types.AppCreator, db dbm.DB, traceWriter io.WriteCloser) (types.Application, error) {
 	config := ctx.Config
 
 	newChainID, ok := ctx.Viper.Get(KeyNewChainID).(string)
@@ -779,7 +814,11 @@ func testnetify(ctx *Context, testnetAppCreator types.AppCreator, db dbm.DB, tra
 	defer blockStore.Close()
 	defer stateDB.Close()
 
-	privValidator := pvm.LoadOrGenFilePV(config.PrivValidatorKeyFile(), config.PrivValidatorStateFile())
+	privValidator, err := pvm.LoadOrGenFilePV(config.PrivValidatorKeyFile(), config.PrivValidatorStateFile(), nil)
+	if err != nil {
+		return nil, err
+	}
+
 	userPubKey, err := privValidator.GetPubKey()
 	if err != nil {
 		return nil, err
@@ -790,7 +829,7 @@ func testnetify(ctx *Context, testnetAppCreator types.AppCreator, db dbm.DB, tra
 		DiscardABCIResponses: config.Storage.DiscardABCIResponses,
 	})
 
-	state, genDoc, err := node.LoadStateFromDBOrGenesisDocProvider(stateDB, genDocProvider)
+	state, genDoc, err := node.LoadStateFromDBOrGenesisDocProvider(stateDB, genDocProvider, "")
 	if err != nil {
 		return nil, err
 	}
@@ -806,12 +845,12 @@ func testnetify(ctx *Context, testnetAppCreator types.AppCreator, db dbm.DB, tra
 	_, context := getCtx(ctx, true)
 	clientCreator := proxy.NewLocalClientCreator(cmtApp)
 	metrics := node.DefaultMetricsProvider(cmtcfg.DefaultConfig().Instrumentation)
-	_, _, _, _, proxyMetrics, _, _ := metrics(genDoc.ChainID)
+	_, _, _, _, _, proxyMetrics, _, _ := metrics(genDoc.ChainID)
 	proxyApp := proxy.NewAppConns(clientCreator, proxyMetrics)
 	if err := proxyApp.Start(); err != nil {
 		return nil, fmt.Errorf("error starting proxy app connections: %v", err)
 	}
-	res, err := proxyApp.Query().Info(context, proxy.RequestInfo)
+	res, err := proxyApp.Query().Info(context, proxy.InfoRequest)
 	if err != nil {
 		return nil, fmt.Errorf("error calling Info: %v", err)
 	}
@@ -825,7 +864,7 @@ func testnetify(ctx *Context, testnetAppCreator types.AppCreator, db dbm.DB, tra
 	var block *cmttypes.Block
 	switch {
 	case appHeight == blockStore.Height():
-		block = blockStore.LoadBlock(blockStore.Height())
+		block, _ = blockStore.LoadBlock(blockStore.Height())
 		// If the state's last blockstore height does not match the app and blockstore height, we likely stopped with the halt height flag.
 		if state.LastBlockHeight != appHeight {
 			state.LastBlockHeight = appHeight
@@ -844,14 +883,15 @@ func testnetify(ctx *Context, testnetAppCreator types.AppCreator, db dbm.DB, tra
 		if err != nil {
 			return nil, err
 		}
-		block = blockStore.LoadBlock(blockStore.Height())
+		block, _ = blockStore.LoadBlock(blockStore.Height())
 	default:
 		// If there is any other state, we just load the block
-		block = blockStore.LoadBlock(blockStore.Height())
+		block, _ = blockStore.LoadBlock(blockStore.Height())
 	}
 
 	block.ChainID = newChainID
 	state.ChainID = newChainID
+	genDoc.ChainID = newChainID
 
 	block.LastBlockID = state.LastBlockID
 	block.LastCommit.BlockID = state.LastBlockID
@@ -870,7 +910,7 @@ func testnetify(ctx *Context, testnetAppCreator types.AppCreator, db dbm.DB, tra
 
 	// Sign the vote, and copy the proto changes from the act of signing to the vote itself
 	voteProto := vote.ToProto()
-	err = privValidator.SignVote(newChainID, voteProto)
+	err = privValidator.SignVote(newChainID, voteProto, false)
 	if err != nil {
 		return nil, err
 	}
@@ -886,6 +926,7 @@ func testnetify(ctx *Context, testnetAppCreator types.AppCreator, db dbm.DB, tra
 	seenCommit := blockStore.LoadSeenCommit(state.LastBlockHeight)
 	seenCommit.BlockID = state.LastBlockID
 	seenCommit.Round = vote.Round
+	seenCommit.Signatures[0].BlockIDFlag = cmttypes.BlockIDFlagCommit // in case validator 0 vote was absent in this commit
 	seenCommit.Signatures[0].Signature = vote.Signature
 	seenCommit.Signatures[0].ValidatorAddress = validatorAddress
 	seenCommit.Signatures[0].Timestamp = vote.Timestamp
@@ -995,6 +1036,7 @@ func addStartNodeFlags(cmd *cobra.Command, opts StartCmdOptions) {
 	cmd.Flags().Uint64(FlagStateSyncSnapshotInterval, 0, "State sync snapshot interval")
 	cmd.Flags().Uint32(FlagStateSyncSnapshotKeepRecent, 2, "State sync snapshot to keep")
 	cmd.Flags().Bool(FlagDisableIAVLFastNode, false, "Disable fast node for IAVL tree")
+	cmd.Flags().Bool(FlagIAVLSyncPruning, true, "Disable async pruning for IAVL tree")
 	cmd.Flags().Int(FlagMempoolMaxTxs, mempool.DefaultMaxTx, "Sets MaxTx value for the app-side mempool")
 	cmd.Flags().Duration(FlagShutdownGrace, 0*time.Second, "On Shutdown, duration to wait for resource clean up")
 

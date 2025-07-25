@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
+	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v1"
 	dbm "github.com/cosmos/cosmos-db"
 	"github.com/stretchr/testify/assert"
 
@@ -72,6 +72,20 @@ func DefaultContextWithDB(t testing.TB, key, tkey storetypes.StoreKey) TestConte
 	cms := store.NewCommitMultiStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics())
 	cms.MountStoreWithDB(key, storetypes.StoreTypeIAVL, db)
 	cms.MountStoreWithDB(tkey, storetypes.StoreTypeTransient, db)
+	err := cms.LoadLatestVersion()
+	assert.NoError(t, err)
+
+	ctx := sdk.NewContext(cms, cmtproto.Header{Time: time.Now()}, false, log.NewNopLogger())
+
+	return TestContext{ctx, db, cms}
+}
+
+func DefaultContextWithObjectStore(t testing.TB, key, tkey, okey storetypes.StoreKey) TestContext {
+	db := dbm.NewMemDB()
+	cms := store.NewCommitMultiStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics())
+	cms.MountStoreWithDB(key, storetypes.StoreTypeIAVL, db)
+	cms.MountStoreWithDB(tkey, storetypes.StoreTypeTransient, nil)
+	cms.MountStoreWithDB(okey, storetypes.StoreTypeObject, nil)
 	err := cms.LoadLatestVersion()
 	assert.NoError(t, err)
 

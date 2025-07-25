@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	cmtabcitypes "github.com/cometbft/cometbft/abci/types"
-	"github.com/cometbft/cometbft/proto/tendermint/types"
+	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v1"
 	"github.com/stretchr/testify/require"
 	"gotest.tools/v3/assert"
 
@@ -61,17 +61,21 @@ func initFixture(t testing.TB) *fixture {
 	keys := storetypes.NewKVStoreKeys(
 		authtypes.StoreKey, banktypes.StoreKey, distrtypes.StoreKey, stakingtypes.StoreKey,
 	)
-	tkey := storetypes.NewTransientStoreKey(banktypes.TStoreKey)
+	tkeys := storetypes.NewTransientStoreKeys(
+		banktypes.TStoreKey,
+	)
+	okeys := storetypes.NewObjectStoreKeys(
+		banktypes.ObjectStoreKey,
+	)
 	cdc := moduletestutil.MakeTestEncodingConfig(auth.AppModuleBasic{}, distribution.AppModuleBasic{}).Codec
 
 	logger := log.NewTestLogger(t)
-	cms := integration.CreateMultiStore(keys, logger)
-	cms.MountStoreWithDB(tkey, storetypes.StoreTypeTransient, nil)
+	cms := integration.CreateMultiStore(keys, tkeys, okeys, logger)
 	if err := cms.LoadLatestVersion(); err != nil {
 		t.Fatalf("failed to load latest version: %v", err)
 	}
 
-	newCtx := sdk.NewContext(cms, types.Header{}, true, logger)
+	newCtx := sdk.NewContext(cms, cmtproto.Header{}, true, logger)
 
 	authority := authtypes.NewModuleAddress("gov")
 
@@ -94,10 +98,12 @@ func initFixture(t testing.TB) *fixture {
 	blockedAddresses := map[string]bool{
 		accountKeeper.GetAuthority(): false,
 	}
+
 	bankKeeper := bankkeeper.NewBaseKeeper(
 		cdc,
 		runtime.NewKVStoreService(keys[banktypes.StoreKey]),
-		runtime.NewTransientKVStoreService(tkey),
+		runtime.NewTransientKVStoreService(tkeys[banktypes.TStoreKey]),
+		okeys[banktypes.ObjectStoreKey],
 		accountKeeper,
 		blockedAddresses,
 		authority.String(),
@@ -126,7 +132,7 @@ func initFixture(t testing.TB) *fixture {
 				Address: valAddr,
 				Power:   100,
 			},
-			BlockIdFlag: types.BlockIDFlagCommit,
+			BlockIdFlag: cmtproto.BlockIDFlagCommit,
 		},
 	})
 
@@ -936,12 +942,14 @@ func TestMsgDepositValidatorRewardsPool(t *testing.T) {
 			},
 		},
 		{
-			name: "happy path (non-staking token)",
+			name: "invalid coins (non-staking token)",
 			msg: &distrtypes.MsgDepositValidatorRewardsPool{
 				Depositor:        addr.String(),
 				ValidatorAddress: valAddr1.String(),
 				Amount:           amt,
 			},
+			expErr:    true,
+			expErrMsg: "invalid coins",
 		},
 		{
 			name: "invalid validator",

@@ -3,7 +3,7 @@ package keeper_test
 import (
 	"testing"
 
-	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
+	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v1"
 	cmttime "github.com/cometbft/cometbft/types/time"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
@@ -26,7 +26,8 @@ import (
 
 func TestBankStateCompatibility(t *testing.T) {
 	key := storetypes.NewKVStoreKey(banktypes.StoreKey)
-	testCtx := testutil.DefaultContextWithDB(t, key, storetypes.NewTransientStoreKey("transient_test"))
+	okey := storetypes.NewObjectStoreKey(banktypes.ObjectStoreKey)
+	testCtx := testutil.DefaultContextWithObjectStore(t, key, storetypes.NewTransientStoreKey("transient_test"), okey)
 	ctx := testCtx.Ctx.WithBlockHeader(cmtproto.Header{Time: cmttime.Now()})
 	encCfg := moduletestutil.MakeTestEncodingConfig()
 	storeService := runtime.NewKVStoreService(key)
@@ -42,6 +43,7 @@ func TestBankStateCompatibility(t *testing.T) {
 		encCfg.Codec,
 		storeService,
 		tStoreService,
+		okey,
 		authKeeper,
 		map[string]bool{accAddrs[4].String(): true},
 		authtypes.NewModuleAddress("gov").String(),

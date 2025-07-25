@@ -16,6 +16,7 @@ var (
 	_ codectypes.UnpackInterfacesMessage = (*MsgCreateValidator)(nil)
 	_ sdk.Msg                            = &MsgEditValidator{}
 	_ sdk.Msg                            = &MsgDelegate{}
+	_ sdk.Msg                            = &MsgTransferDelegation{}
 	_ sdk.Msg                            = &MsgUndelegate{}
 	_ sdk.Msg                            = &MsgBeginRedelegate{}
 	_ sdk.Msg                            = &MsgCancelUnbondingDelegation{}
@@ -103,37 +104,21 @@ func NewMsgEditValidator(valAddr string, description Description, newRate *math.
 	}
 }
 
-// ValidateBasic implements the sdk.Msg interface.
-func (msg MsgEditValidator) ValidateBasic() error {
-	if _, err := sdk.ValAddressFromBech32(msg.ValidatorAddress); err != nil {
-		return sdkerrors.ErrInvalidAddress.Wrapf("invalid validator address: %s", err)
-	}
-
-	if msg.Description == (Description{}) {
-		return errorsmod.Wrap(sdkerrors.ErrInvalidRequest, "empty description")
-	}
-
-	if msg.MinSelfDelegation != nil && !msg.MinSelfDelegation.IsPositive() {
-		return errorsmod.Wrap(
-			sdkerrors.ErrInvalidRequest,
-			"minimum self delegation must be a positive integer",
-		)
-	}
-
-	if msg.CommissionRate != nil {
-		if msg.CommissionRate.GT(math.LegacyOneDec()) || msg.CommissionRate.IsNegative() {
-			return errorsmod.Wrap(sdkerrors.ErrInvalidRequest, "commission rate must be between 0 and 1 (inclusive)")
-		}
-	}
-
-	return nil
-}
-
 // NewMsgDelegate creates a new MsgDelegate instance.
 func NewMsgDelegate(delAddr, valAddr string, amount sdk.Coin) *MsgDelegate {
 	return &MsgDelegate{
 		DelegatorAddress: delAddr,
 		ValidatorAddress: valAddr,
+		Amount:           amount,
+	}
+}
+
+// NewMsgDelegateMsgTransferDelegation creates a new MsgTransferDelegation instance.
+func NewMsgTransferDelegation(delAddr, valAddr, receiverAddr string, amount sdk.Coin) *MsgTransferDelegation {
+	return &MsgTransferDelegation{
+		DelegatorAddress: delAddr,
+		ValidatorAddress: valAddr,
+		ReceiverAddress:  receiverAddr,
 		Amount:           amount,
 	}
 }
