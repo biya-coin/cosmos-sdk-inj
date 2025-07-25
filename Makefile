@@ -14,6 +14,9 @@ HTTPS_GIT := https://github.com/cosmos/cosmos-sdk.git
 DOCKER := $(shell which docker)
 PROJECT_NAME = $(shell git remote get-url origin | xargs basename -s .git)
 
+# Subdirectories for tagging
+SUBDIR_PREFIXES := api core errors store x/circuit x/evidence x/feegrant x/nft x/tx x/upgrade
+
 # process build tags
 build_tags = netgo
 ifeq ($(LEDGER_ENABLED),true)
@@ -481,3 +484,30 @@ localnet-start: localnet-stop localnet-build-env localnet-build-nodes
 localnet-debug: localnet-stop localnet-build-dlv localnet-build-nodes
 
 .PHONY: localnet-start localnet-stop localnet-debug localnet-build-env localnet-build-dlv localnet-build-nodes
+
+###############################################################################
+###                                Tagging                                  ###
+###############################################################################
+
+# tag-subdirs creates and pushes tags with subdir prefixes for a given tag
+# Usage: make tag-subdirs TAG=v1.2.3
+# NOTE: the tag for the "client" subdir requires a different version number (it has to start with 2)
+# It has to be created manually
+tag-subdirs:
+ifndef TAG
+	$(error TAG is required. Usage: make tag-subdirs TAG=v1.2.3)
+endif
+	@echo "Checking out tag $(TAG) from origin..."
+	@git fetch origin
+	@git checkout $(TAG)
+	@echo "Creating and pushing subdir tags for $(TAG)..."
+	@for prefix in $(SUBDIR_PREFIXES); do \
+		new_tag="$$prefix/$(TAG)"; \
+		echo "Creating tag: $$new_tag"; \
+		git tag "$$new_tag" $(TAG); \
+		echo "Pushing tag: $$new_tag"; \
+		git push origin "$$new_tag"; \
+	done
+	@echo "Successfully created and pushed all subdir tags for $(TAG)"
+
+.PHONY: tag-subdirs
