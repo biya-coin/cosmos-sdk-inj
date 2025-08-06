@@ -10,11 +10,7 @@ import (
 
 	address "cosmossdk.io/core/address"
 	math "cosmossdk.io/math"
-<<<<<<< HEAD
-	crypto "github.com/cometbft/cometbft/api/cometbft/crypto/v1"
-=======
 	v1 "github.com/cometbft/cometbft/api/cometbft/crypto/v1"
->>>>>>> v0.50.13-storefix-inj.2
 	types "github.com/cosmos/cosmos-sdk/types"
 	types0 "github.com/cosmos/cosmos-sdk/x/staking/types"
 	gomock "github.com/golang/mock/gomock"

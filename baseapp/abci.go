@@ -845,6 +845,18 @@ func (app *BaseApp) internalFinalizeBlock(ctx context.Context, req *abci.Finaliz
 	events = append(events, endBlock.Events...)
 	cp := app.GetConsensusParams(app.finalizeBlockState.Context())
 
+	events, trueOrder := filterOutPublishEvents(events)
+	app.flushData = PublishEventFlush{
+		Height:      header.Height,
+		PrevAppHash: header.AppHash,
+		BlockEvents: EventSet{
+			AbciEvents:    events,
+			PublishEvents: publishEvents,
+			TrueOrder:     trueOrder,
+		},
+		TxEvents: txEventSet,
+	}
+
 	return &abci.FinalizeBlockResponse{
 		Events:                events,
 		TxResults:             txResults,
@@ -1000,6 +1012,9 @@ func (app *BaseApp) Commit() (*abci.CommitResponse, error) {
 	}
 
 	commitId := app.cms.Commit()
+
+	app.flushData.NewAppHash = commitId.Hash
+	app.PublishBlockEvents(app.flushData)
 
 	resp := &abci.CommitResponse{
 		RetainHeight: retainHeight,

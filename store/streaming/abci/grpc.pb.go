@@ -175,7 +175,7 @@ func (m *ListenCommitRequest) GetRes() *types.CommitResponse {
 	return nil
 }
 
-func (m *ListenCommitRequest) GetChangeSet() []*types.StoreKVPair {
+func (m *ListenCommitRequest) GetChangeSet() []*types1.StoreKVPair {
 	if m != nil {
 		return m.ChangeSet
 	}
@@ -886,7 +886,7 @@ func (m *ListenCommitRequest) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			m.ChangeSet = append(m.ChangeSet, &types.StoreKVPair{})
+			m.ChangeSet = append(m.ChangeSet, &types1.StoreKVPair{})
 			if err := m.ChangeSet[len(m.ChangeSet)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
