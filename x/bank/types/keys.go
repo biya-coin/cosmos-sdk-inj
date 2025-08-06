@@ -18,9 +18,6 @@ const (
 	// TStoreKey defines the primary module transient store key
 	TStoreKey = "transient:" + ModuleName
 
-	// ObjectStoreKey defines the store name for the object store
-	ObjectStoreKey = "object:" + ModuleName
-
 	// RouterKey defines the module's message routing key
 	RouterKey = ModuleName
 )

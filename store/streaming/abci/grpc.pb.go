@@ -5,17 +5,18 @@ package abci
 
 import (
 	context "context"
-	types "cosmossdk.io/store/types"
 	fmt "fmt"
-	v1 "github.com/cometbft/cometbft/api/cometbft/abci/v1"
+	io "io"
+	math "math"
+	math_bits "math/bits"
+
+	types1 "cosmossdk.io/store/types"
+	types "github.com/cometbft/cometbft/abci/types"
 	grpc1 "github.com/cosmos/gogoproto/grpc"
 	proto "github.com/cosmos/gogoproto/proto"
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
-	io "io"
-	math "math"
-	math_bits "math/bits"
 )
 
 // Reference imports to suppress errors if they are not otherwise used.
@@ -31,8 +32,8 @@ const _ = proto.GoGoProtoPackageIsVersion3 // please upgrade the proto package
 
 // ListenEndBlockRequest is the request type for the ListenEndBlock RPC method
 type ListenFinalizeBlockRequest struct {
-	Req *v1.FinalizeBlockRequest  `protobuf:"bytes,1,opt,name=req,proto3" json:"req,omitempty"`
-	Res *v1.FinalizeBlockResponse `protobuf:"bytes,2,opt,name=res,proto3" json:"res,omitempty"`
+	Req *types.FinalizeBlockRequest  `protobuf:"bytes,1,opt,name=req,proto3" json:"req,omitempty"`
+	Res *types.FinalizeBlockResponse `protobuf:"bytes,2,opt,name=res,proto3" json:"res,omitempty"`
 }
 
 func (m *ListenFinalizeBlockRequest) Reset()         { *m = ListenFinalizeBlockRequest{} }
@@ -68,14 +69,14 @@ func (m *ListenFinalizeBlockRequest) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_ListenFinalizeBlockRequest proto.InternalMessageInfo
 
-func (m *ListenFinalizeBlockRequest) GetReq() *v1.FinalizeBlockRequest {
+func (m *ListenFinalizeBlockRequest) GetReq() *types.FinalizeBlockRequest {
 	if m != nil {
 		return m.Req
 	}
 	return nil
 }
 
-func (m *ListenFinalizeBlockRequest) GetRes() *v1.FinalizeBlockResponse {
+func (m *ListenFinalizeBlockRequest) GetRes() *types.FinalizeBlockResponse {
 	if m != nil {
 		return m.Res
 	}
@@ -121,10 +122,10 @@ var xxx_messageInfo_ListenFinalizeBlockResponse proto.InternalMessageInfo
 
 // ListenCommitRequest is the request type for the ListenCommit RPC method
 type ListenCommitRequest struct {
-	// explicitly pass in block height as ResponseCommit does not contain this info
-	BlockHeight int64                `protobuf:"varint,1,opt,name=block_height,json=blockHeight,proto3" json:"block_height,omitempty"`
-	Res         *v1.CommitResponse   `protobuf:"bytes,2,opt,name=res,proto3" json:"res,omitempty"`
-	ChangeSet   []*types.StoreKVPair `protobuf:"bytes,3,rep,name=change_set,json=changeSet,proto3" json:"change_set,omitempty"`
+	// explicitly pass in block height as CommitResponse does not contain this info
+	BlockHeight int64                 `protobuf:"varint,1,opt,name=block_height,json=blockHeight,proto3" json:"block_height,omitempty"`
+	Res         *types.CommitResponse `protobuf:"bytes,2,opt,name=res,proto3" json:"res,omitempty"`
+	ChangeSet   []*types1.StoreKVPair `protobuf:"bytes,3,rep,name=change_set,json=changeSet,proto3" json:"change_set,omitempty"`
 }
 
 func (m *ListenCommitRequest) Reset()         { *m = ListenCommitRequest{} }
@@ -167,7 +168,7 @@ func (m *ListenCommitRequest) GetBlockHeight() int64 {
 	return 0
 }
 
-func (m *ListenCommitRequest) GetRes() *v1.CommitResponse {
+func (m *ListenCommitRequest) GetRes() *types.CommitResponse {
 	if m != nil {
 		return m.Res
 	}
@@ -659,7 +660,7 @@ func (m *ListenFinalizeBlockRequest) Unmarshal(dAtA []byte) error {
 				return io.ErrUnexpectedEOF
 			}
 			if m.Req == nil {
-				m.Req = &v1.FinalizeBlockRequest{}
+				m.Req = &types.FinalizeBlockRequest{}
 			}
 			if err := m.Req.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
@@ -695,7 +696,7 @@ func (m *ListenFinalizeBlockRequest) Unmarshal(dAtA []byte) error {
 				return io.ErrUnexpectedEOF
 			}
 			if m.Res == nil {
-				m.Res = &v1.FinalizeBlockResponse{}
+				m.Res = &types.FinalizeBlockResponse{}
 			}
 			if err := m.Res.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
@@ -850,7 +851,7 @@ func (m *ListenCommitRequest) Unmarshal(dAtA []byte) error {
 				return io.ErrUnexpectedEOF
 			}
 			if m.Res == nil {
-				m.Res = &v1.CommitResponse{}
+				m.Res = &types.CommitResponse{}
 			}
 			if err := m.Res.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err

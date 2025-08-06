@@ -98,14 +98,11 @@ func initFixture(t testing.TB) *fixture {
 	tkeys := storetypes.NewTransientStoreKeys(
 		banktypes.TStoreKey,
 	)
-	okeys := storetypes.NewObjectStoreKeys(
-		banktypes.ObjectStoreKey,
-	)
 
 	cdc := moduletestutil.MakeTestEncodingConfig(auth.AppModuleBasic{}, staking.AppModuleBasic{}).Codec
 
 	logger := log.NewTestLogger(t)
-	cms := integration.CreateMultiStore(keys, tkeys, okeys, logger)
+	cms := integration.CreateMultiStore(keys, tkeys, logger)
 	if err := cms.LoadLatestVersion(); err != nil {
 		t.Fatalf("failed to load latest version: %v", err)
 	}
@@ -138,7 +135,6 @@ func initFixture(t testing.TB) *fixture {
 		cdc,
 		runtime.NewKVStoreService(keys[banktypes.StoreKey]),
 		runtime.NewTransientKVStoreService(tkeys[banktypes.TStoreKey]),
-		okeys[banktypes.ObjectStoreKey],
 		accountKeeper,
 		blockedAddresses,
 		authority.String(),

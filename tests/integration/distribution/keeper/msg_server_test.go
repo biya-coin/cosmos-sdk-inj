@@ -64,13 +64,10 @@ func initFixture(t testing.TB) *fixture {
 	tkeys := storetypes.NewTransientStoreKeys(
 		banktypes.TStoreKey,
 	)
-	okeys := storetypes.NewObjectStoreKeys(
-		banktypes.ObjectStoreKey,
-	)
 	cdc := moduletestutil.MakeTestEncodingConfig(auth.AppModuleBasic{}, distribution.AppModuleBasic{}).Codec
 
 	logger := log.NewTestLogger(t)
-	cms := integration.CreateMultiStore(keys, tkeys, okeys, logger)
+	cms := integration.CreateMultiStore(keys, tkeys, logger)
 	if err := cms.LoadLatestVersion(); err != nil {
 		t.Fatalf("failed to load latest version: %v", err)
 	}
@@ -103,7 +100,6 @@ func initFixture(t testing.TB) *fixture {
 		cdc,
 		runtime.NewKVStoreService(keys[banktypes.StoreKey]),
 		runtime.NewTransientKVStoreService(tkeys[banktypes.TStoreKey]),
-		okeys[banktypes.ObjectStoreKey],
 		accountKeeper,
 		blockedAddresses,
 		authority.String(),
@@ -942,12 +938,14 @@ func TestMsgDepositValidatorRewardsPool(t *testing.T) {
 			},
 		},
 		{
-			name: "happy path (non-staking token)",
+			name: "invalid coins (non-staking token)",
 			msg: &distrtypes.MsgDepositValidatorRewardsPool{
 				Depositor:        addr.String(),
 				ValidatorAddress: valAddr1.String(),
 				Amount:           amt,
 			},
+			expErr:    true,
+			expErrMsg: "invalid coins",
 		},
 		{
 			name: "invalid validator",

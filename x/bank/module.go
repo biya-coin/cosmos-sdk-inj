@@ -16,7 +16,6 @@ import (
 	corestore "cosmossdk.io/core/store"
 	"cosmossdk.io/depinject"
 	"cosmossdk.io/log"
-	storetypes "cosmossdk.io/store/types"
 
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/codec"
@@ -179,7 +178,7 @@ func (am AppModule) BeginBlock(ctx sdk.Context) {
 // updates.
 func (am AppModule) EndBlock(ctx context.Context) error {
 	am.keeper.EmitAllTransientBalances(ctx)
-	return am.keeper.CreditVirtualAccounts(ctx)
+	return nil
 }
 
 // AppModuleSimulation functions
@@ -223,7 +222,6 @@ type ModuleInputs struct {
 	Cdc           codec.Codec
 	StoreService  corestore.KVStoreService
 	TStoreService corestore.TransientStoreService
-	ObjStoreKey   *storetypes.ObjectStoreKey
 	Logger        log.Logger
 
 	AccountKeeper types.AccountKeeper
@@ -265,7 +263,6 @@ func ProvideModule(in ModuleInputs) ModuleOutputs {
 		in.Cdc,
 		in.StoreService,
 		in.TStoreService,
-		in.ObjStoreKey,
 		in.AccountKeeper,
 		blockedAddresses,
 		authority.String(),

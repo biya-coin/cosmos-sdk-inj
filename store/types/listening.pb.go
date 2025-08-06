@@ -5,11 +5,12 @@ package types
 
 import (
 	fmt "fmt"
-	v1 "github.com/cometbft/cometbft/api/cometbft/abci/v1"
-	proto "github.com/cosmos/gogoproto/proto"
 	io "io"
 	math "math"
 	math_bits "math/bits"
+
+	types "github.com/cometbft/cometbft/abci/types"
+	proto "github.com/cosmos/gogoproto/proto"
 )
 
 // Reference imports to suppress errors if they are not otherwise used.
@@ -99,9 +100,9 @@ func (m *StoreKVPair) GetValue() []byte {
 // BlockMetadata contains all the abci event data of a block
 // the file streamer dump them into files together with the state changes.
 type BlockMetadata struct {
-	ResponseCommit        *v1.CommitResponse        `protobuf:"bytes,6,opt,name=response_commit,json=responseCommit,proto3" json:"response_commit,omitempty"`
-	RequestFinalizeBlock  *v1.FinalizeBlockRequest  `protobuf:"bytes,7,opt,name=request_finalize_block,json=requestFinalizeBlock,proto3" json:"request_finalize_block,omitempty"`
-	ResponseFinalizeBlock *v1.FinalizeBlockResponse `protobuf:"bytes,8,opt,name=response_finalize_block,json=responseFinalizeBlock,proto3" json:"response_finalize_block,omitempty"`
+	CommitResponse        *types.CommitResponse        `protobuf:"bytes,6,opt,name=response_commit,json=responseCommit,proto3" json:"response_commit,omitempty"`
+	FinalizeBlockRequest  *types.FinalizeBlockRequest  `protobuf:"bytes,7,opt,name=request_finalize_block,json=requestFinalizeBlock,proto3" json:"request_finalize_block,omitempty"`
+	FinalizeBlockResponse *types.FinalizeBlockResponse `protobuf:"bytes,8,opt,name=response_finalize_block,json=responseFinalizeBlock,proto3" json:"response_finalize_block,omitempty"`
 }
 
 func (m *BlockMetadata) Reset()         { *m = BlockMetadata{} }
@@ -137,23 +138,23 @@ func (m *BlockMetadata) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_BlockMetadata proto.InternalMessageInfo
 
-func (m *BlockMetadata) GetResponseCommit() *v1.CommitResponse {
+func (m *BlockMetadata) GetCommitResponse() *types.CommitResponse {
 	if m != nil {
-		return m.ResponseCommit
+		return m.CommitResponse
 	}
 	return nil
 }
 
-func (m *BlockMetadata) GetRequestFinalizeBlock() *v1.FinalizeBlockRequest {
+func (m *BlockMetadata) GetFinalizeBlockRequest() *types.FinalizeBlockRequest {
 	if m != nil {
-		return m.RequestFinalizeBlock
+		return m.FinalizeBlockRequest
 	}
 	return nil
 }
 
-func (m *BlockMetadata) GetResponseFinalizeBlock() *v1.FinalizeBlockResponse {
+func (m *BlockMetadata) GetFinalizeBlockResponse() *types.FinalizeBlockResponse {
 	if m != nil {
-		return m.ResponseFinalizeBlock
+		return m.FinalizeBlockResponse
 	}
 	return nil
 }
@@ -269,9 +270,9 @@ func (m *BlockMetadata) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
-	if m.ResponseFinalizeBlock != nil {
+	if m.FinalizeBlockResponse != nil {
 		{
-			size, err := m.ResponseFinalizeBlock.MarshalToSizedBuffer(dAtA[:i])
+			size, err := m.FinalizeBlockResponse.MarshalToSizedBuffer(dAtA[:i])
 			if err != nil {
 				return 0, err
 			}
@@ -281,9 +282,9 @@ func (m *BlockMetadata) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i--
 		dAtA[i] = 0x42
 	}
-	if m.RequestFinalizeBlock != nil {
+	if m.FinalizeBlockRequest != nil {
 		{
-			size, err := m.RequestFinalizeBlock.MarshalToSizedBuffer(dAtA[:i])
+			size, err := m.FinalizeBlockRequest.MarshalToSizedBuffer(dAtA[:i])
 			if err != nil {
 				return 0, err
 			}
@@ -293,9 +294,9 @@ func (m *BlockMetadata) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i--
 		dAtA[i] = 0x3a
 	}
-	if m.ResponseCommit != nil {
+	if m.CommitResponse != nil {
 		{
-			size, err := m.ResponseCommit.MarshalToSizedBuffer(dAtA[:i])
+			size, err := m.CommitResponse.MarshalToSizedBuffer(dAtA[:i])
 			if err != nil {
 				return 0, err
 			}
@@ -349,16 +350,16 @@ func (m *BlockMetadata) Size() (n int) {
 	}
 	var l int
 	_ = l
-	if m.ResponseCommit != nil {
-		l = m.ResponseCommit.Size()
+	if m.CommitResponse != nil {
+		l = m.CommitResponse.Size()
 		n += 1 + l + sovListening(uint64(l))
 	}
-	if m.RequestFinalizeBlock != nil {
-		l = m.RequestFinalizeBlock.Size()
+	if m.FinalizeBlockRequest != nil {
+		l = m.FinalizeBlockRequest.Size()
 		n += 1 + l + sovListening(uint64(l))
 	}
-	if m.ResponseFinalizeBlock != nil {
-		l = m.ResponseFinalizeBlock.Size()
+	if m.FinalizeBlockResponse != nil {
+		l = m.FinalizeBlockResponse.Size()
 		n += 1 + l + sovListening(uint64(l))
 	}
 	return n
@@ -571,7 +572,7 @@ func (m *BlockMetadata) Unmarshal(dAtA []byte) error {
 		switch fieldNum {
 		case 6:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field ResponseCommit", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field CommitResponse", wireType)
 			}
 			var msglen int
 			for shift := uint(0); ; shift += 7 {
@@ -598,16 +599,16 @@ func (m *BlockMetadata) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if m.ResponseCommit == nil {
-				m.ResponseCommit = &v1.CommitResponse{}
+			if m.CommitResponse == nil {
+				m.CommitResponse = &types.CommitResponse{}
 			}
-			if err := m.ResponseCommit.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			if err := m.CommitResponse.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
 		case 7:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field RequestFinalizeBlock", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field FinalizeBlockRequest", wireType)
 			}
 			var msglen int
 			for shift := uint(0); ; shift += 7 {
@@ -634,16 +635,16 @@ func (m *BlockMetadata) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if m.RequestFinalizeBlock == nil {
-				m.RequestFinalizeBlock = &v1.FinalizeBlockRequest{}
+			if m.FinalizeBlockRequest == nil {
+				m.FinalizeBlockRequest = &types.FinalizeBlockRequest{}
 			}
-			if err := m.RequestFinalizeBlock.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			if err := m.FinalizeBlockRequest.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
 		case 8:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field ResponseFinalizeBlock", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field FinalizeBlockResponse", wireType)
 			}
 			var msglen int
 			for shift := uint(0); ; shift += 7 {
@@ -670,10 +671,10 @@ func (m *BlockMetadata) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if m.ResponseFinalizeBlock == nil {
-				m.ResponseFinalizeBlock = &v1.FinalizeBlockResponse{}
+			if m.FinalizeBlockResponse == nil {
+				m.FinalizeBlockResponse = &types.FinalizeBlockResponse{}
 			}
-			if err := m.ResponseFinalizeBlock.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			if err := m.FinalizeBlockResponse.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex

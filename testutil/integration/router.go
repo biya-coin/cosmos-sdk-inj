@@ -181,7 +181,6 @@ func (app *App) QueryHelper() *baseapp.QueryServiceTestHelper {
 func CreateMultiStore(
 	keys map[string]*storetypes.KVStoreKey,
 	tkeys map[string]*storetypes.TransientStoreKey,
-	okeys map[string]*storetypes.ObjectStoreKey,
 	logger log.Logger,
 ) storetypes.CommitMultiStore {
 	db := dbm.NewMemDB()
@@ -193,10 +192,6 @@ func CreateMultiStore(
 
 	for key := range tkeys {
 		cms.MountStoreWithDB(tkeys[key], storetypes.StoreTypeTransient, db)
-	}
-
-	for key := range okeys {
-		cms.MountStoreWithDB(okeys[key], storetypes.StoreTypeObject, db)
 	}
 
 	_ = cms.LoadLatestVersion()

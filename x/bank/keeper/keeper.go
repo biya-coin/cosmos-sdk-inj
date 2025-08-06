@@ -8,7 +8,6 @@ import (
 	errorsmod "cosmossdk.io/errors"
 	"cosmossdk.io/log"
 	"cosmossdk.io/math"
-	storetypes "cosmossdk.io/store/types"
 
 	"github.com/cosmos/cosmos-sdk/codec"
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -50,9 +49,6 @@ type Keeper interface {
 	UndelegateCoins(ctx context.Context, moduleAccAddr, delegatorAddr sdk.AccAddress, amt sdk.Coins) error
 
 	EmitAllTransientBalances(ctx context.Context)
-	SendCoinsFromAccountToModuleVirtual(ctx context.Context, senderAddr sdk.AccAddress, recipientModule string, amt sdk.Coins) error
-	SendCoinsFromModuleToAccountVirtual(ctx context.Context, senderModule string, recipientAddr sdk.AccAddress, amt sdk.Coins) error
-	CreditVirtualAccounts(ctx context.Context) error
 
 	types.QueryServer
 }
@@ -90,7 +86,6 @@ func NewBaseKeeper(
 	cdc codec.BinaryCodec,
 	storeService store.KVStoreService,
 	tStoreService store.TransientStoreService,
-	objStoreKey storetypes.StoreKey,
 	ak types.AccountKeeper,
 	blockedAddrs map[string]bool,
 	authority string,
@@ -104,7 +99,7 @@ func NewBaseKeeper(
 	logger = logger.With(log.ModuleKey, "x/"+types.ModuleName)
 
 	return BaseKeeper{
-		BaseSendKeeper:         NewBaseSendKeeper(cdc, storeService, tStoreService, objStoreKey, ak, blockedAddrs, authority, logger),
+		BaseSendKeeper:         NewBaseSendKeeper(cdc, storeService, tStoreService, ak, blockedAddrs, authority, logger),
 		ak:                     ak,
 		cdc:                    cdc,
 		storeService:           storeService,

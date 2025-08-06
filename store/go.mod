@@ -7,7 +7,7 @@ toolchain go1.23.8
 require (
 	cosmossdk.io/errors v1.0.0
 	cosmossdk.io/log v1.4.1
-	cosmossdk.io/math v1.4.0
+	cosmossdk.io/math v1.3.0
 	github.com/cometbft/cometbft v0.38.12
 	github.com/cosmos/cosmos-db v1.0.2
 	github.com/cosmos/gogoproto v1.7.0
@@ -80,6 +80,6 @@ require (
 
 replace (
 	// Use CometBFT v1.0.1 with Mempool lanes and DOG
-	github.com/cometbft/cometbft => github.com/InjectiveLabs/cometbft v1.0.1-inj
-	github.com/cometbft/cometbft/api => github.com/injectivelabs/cometbft/api v1.0.1-0.20250315062455-e9e4c8a0ecb9
+	github.com/cometbft/cometbft => github.com/InjectiveLabs/cometbft v1.0.1-inj.3
+	github.com/cometbft/cometbft/api => github.com/InjectiveLabs/cometbft/api v1.0.0-inj.2
 )

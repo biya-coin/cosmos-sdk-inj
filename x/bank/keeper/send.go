@@ -9,7 +9,6 @@ import (
 	errorsmod "cosmossdk.io/errors"
 	"cosmossdk.io/log"
 	"cosmossdk.io/math"
-	storetypes "cosmossdk.io/store/types"
 
 	"github.com/cosmos/cosmos-sdk/codec"
 	"github.com/cosmos/cosmos-sdk/telemetry"
@@ -60,7 +59,6 @@ type BaseSendKeeper struct {
 	cdc          codec.BinaryCodec
 	ak           types.AccountKeeper
 	storeService store.KVStoreService
-	objStoreKey  storetypes.StoreKey
 	logger       log.Logger
 
 	// list of addresses that are restricted from receiving transactions
@@ -77,7 +75,6 @@ func NewBaseSendKeeper(
 	cdc codec.BinaryCodec,
 	storeService store.KVStoreService,
 	tStoreService store.TransientStoreService,
-	objStoreKey storetypes.StoreKey,
 	ak types.AccountKeeper,
 	blockedAddrs map[string]bool,
 	authority string,
@@ -92,7 +89,6 @@ func NewBaseSendKeeper(
 		cdc:             cdc,
 		ak:              ak,
 		storeService:    storeService,
-		objStoreKey:     objStoreKey,
 		blockedAddrs:    blockedAddrs,
 		authority:       authority,
 		logger:          logger,
