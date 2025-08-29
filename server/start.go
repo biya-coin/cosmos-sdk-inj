@@ -991,7 +991,7 @@ func Testnetify(ctx *Context, testnetAppCreator types.AppCreator, db dbm.DB, tra
 	}
 
 	// Since we modified the chainID, we set the new genesisDoc in the stateDB.
-	b, err := cmtjson.Marshal(genDoc)
+	b, err := cmtjson.MarshalIndent(genDoc, "", "  ")
 	if err != nil {
 		return nil, err
 	}
