@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"time"
 
 	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v1"
@@ -85,10 +84,6 @@ func (ag *AppGenesis) SaveAs(file string) error {
 	if err != nil {
 		return err
 	}
-
-	// Convert initial_height from number to string
-	re := regexp.MustCompile(`"initial_height":\s*(\d+)`)
-	appGenesisBytes = re.ReplaceAll(appGenesisBytes, []byte(`"initial_height":"$1"`))
 
 	return os.WriteFile(file, appGenesisBytes, 0o600)
 }
