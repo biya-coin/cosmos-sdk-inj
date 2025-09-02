@@ -785,6 +785,15 @@ func Testnetify(ctx *Context, testnetAppCreator types.AppCreator, db dbm.DB, tra
 		return nil, err
 	}
 
+	// remove hash from StateDB since it will not match to genesis hash anymore
+	stateDB, err := cmtcfg.DefaultDBProvider(&cmtcfg.DBContext{ID: "state", Config: config})
+	if err != nil {
+		return nil, err
+	}
+	if err := stateDB.DeleteSync([]byte("genesisDocHash")); err != nil {
+		return nil, err
+	}
+
 	// Regenerate addrbook.json to prevent peers on old network from causing error logs.
 	addrBookPath := filepath.Join(config.RootDir, "config", "addrbook.json")
 	if err := os.Remove(addrBookPath); err != nil && !os.IsNotExist(err) {
@@ -805,11 +814,6 @@ func Testnetify(ctx *Context, testnetAppCreator types.AppCreator, db dbm.DB, tra
 		return nil, err
 	}
 	blockStore := store.NewBlockStore(blockStoreDB)
-
-	stateDB, err := cmtcfg.DefaultDBProvider(&cmtcfg.DBContext{ID: "state", Config: config})
-	if err != nil {
-		return nil, err
-	}
 
 	defer blockStore.Close()
 	defer stateDB.Close()
@@ -991,7 +995,7 @@ func Testnetify(ctx *Context, testnetAppCreator types.AppCreator, db dbm.DB, tra
 	}
 
 	// Since we modified the chainID, we set the new genesisDoc in the stateDB.
-	b, err := cmtjson.Marshal(genDoc)
+	b, err := cmtjson.MarshalIndent(genDoc, "", "  ")
 	if err != nil {
 		return nil, err
 	}
