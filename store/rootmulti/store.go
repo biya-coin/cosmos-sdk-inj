@@ -103,7 +103,7 @@ func NewStore(db dbm.DB, logger log.Logger, metricGatherer metrics.StoreMetrics)
 	}
 }
 
-func (rs *Store) Copy() (*Store, error) {
+func (rs *Store) Copy(storeLoader func(ms types.CommitMultiStore) error) (*Store, error) {
 	copyRs := &Store{
 		db:                  rs.db,
 		logger:              rs.logger,
@@ -116,7 +116,7 @@ func (rs *Store) Copy() (*Store, error) {
 		pruningManager:      pruning.NewManager(rs.db, rs.logger),
 		metrics:             rs.metrics,
 	}
-	if err := copyRs.LoadLatestVersion(); err != nil {
+	if err := storeLoader(copyRs); err != nil {
 		return nil, err
 	}
 	return copyRs, nil

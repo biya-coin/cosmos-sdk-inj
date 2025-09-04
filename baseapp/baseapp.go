@@ -27,6 +27,7 @@ import (
 	"cosmossdk.io/store/snapshots"
 	storetypes "cosmossdk.io/store/types"
 
+	injmempool "github.com/InjectiveLabs/injective-core/injective-chain/mempool"
 	"github.com/cosmos/cosmos-sdk/baseapp/oe"
 	"github.com/cosmos/cosmos-sdk/codec"
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
@@ -525,7 +526,7 @@ func (app *BaseApp) setState(mode execMode, h cmtproto.Header) {
 	switch mode {
 	case execModeCheck:
 		// load new IAVL MutableTree with the same version as app.cms to allow parallel reads and writes of block execution and CheckTx
-		copyMs, err := app.cms.(*rootmulti.Store).Copy()
+		copyMs, err := app.cms.(*rootmulti.Store).Copy(app.storeLoader)
 		if err != nil {
 			panic(err)
 		}
@@ -1021,7 +1022,7 @@ func (app *BaseApp) runTxWithMultiStore(
 		}
 	} else if mode == execModeFinalize {
 		err = app.mempool.Remove(tx)
-		if err != nil && !errors.Is(err, mempool.ErrTxNotFound) {
+		if err != nil && !errors.Is(err, mempool.ErrTxNotFound) && !errors.Is(err, injmempool.ErrTxNotFoundInMempool) {
 			return gInfo, nil, anteEvents,
 				fmt.Errorf("failed to remove tx from mempool: %w", err)
 		}
