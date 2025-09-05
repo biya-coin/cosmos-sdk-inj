@@ -27,7 +27,6 @@ import (
 	"cosmossdk.io/store/snapshots"
 	storetypes "cosmossdk.io/store/types"
 
-	injmempool "github.com/InjectiveLabs/injective-core/injective-chain/mempool"
 	"github.com/cosmos/cosmos-sdk/baseapp/oe"
 	"github.com/cosmos/cosmos-sdk/codec"
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
@@ -1022,7 +1021,7 @@ func (app *BaseApp) runTxWithMultiStore(
 		}
 	} else if mode == execModeFinalize {
 		err = app.mempool.Remove(tx)
-		if err != nil && !errors.Is(err, mempool.ErrTxNotFound) && !errors.Is(err, injmempool.ErrTxNotFoundInMempool) {
+		if err != nil && !errors.Is(err, mempool.ErrTxNotFound) {
 			return gInfo, nil, anteEvents,
 				fmt.Errorf("failed to remove tx from mempool: %w", err)
 		}
