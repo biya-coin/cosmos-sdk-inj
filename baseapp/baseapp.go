@@ -966,19 +966,16 @@ func (app *BaseApp) runTxWithMultiStore(
 		}
 	}
 
+	var (
+		anteCtx sdk.Context
+		msCache storetypes.CacheMultiStore
+	)
 	if app.anteHandler != nil {
-		var (
-			anteCtx sdk.Context
-			msCache storetypes.CacheMultiStore
-		)
 
 		// Branch context before AnteHandler call in case it aborts.
-		// This is required for DeliverTx, while CheckTx will handle branching iby itself nside ante handlers
-		if mode != execModeCheck && mode != execModeReCheck {
-			anteCtx, msCache = app.cacheTxContext(ctx, txBytes)
-		} else {
-			anteCtx = ctx
-		}
+		// This is required to discard writes made by prior ante handler in case latter handler fails and we revert the whole ante chain
+		anteCtx, msCache = app.cacheTxContext(ctx, txBytes)
+
 		anteCtx = anteCtx.WithEventManager(sdk.NewEventManager())
 		newCtx, err := app.anteHandler(anteCtx, tx, mode == execModeSimulate)
 
@@ -1008,7 +1005,7 @@ func (app *BaseApp) runTxWithMultiStore(
 			}
 			return gInfo, nil, nil, err
 		}
-		if msCache != nil { // nil in CheckTx and RecheckTx
+		if mode != execModeCheck { // commit during deliverTx and reCheckTx, but wait for mempool insertion during CheckTx
 			msCache.Write()
 		}
 		anteEvents = events.ToABCIEvents()
@@ -1018,6 +1015,8 @@ func (app *BaseApp) runTxWithMultiStore(
 		err = app.mempool.Insert(ctx, tx)
 		if err != nil {
 			return gInfo, nil, anteEvents, err
+		} else {
+			msCache.Write() // commit ante changes since we succeeded on tx insertion into mempool
 		}
 	} else if mode == execModeFinalize {
 		err = app.mempool.Remove(tx)
