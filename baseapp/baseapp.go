@@ -942,6 +942,14 @@ func (app *BaseApp) runTxWithMultiStore(
 		defer consumeBlockGas()
 	}
 
+	if mode == execModeFinalize {
+		defer func() {
+			if mempoolErr := app.mempool.Remove(tx); mempoolErr != nil && !errors.Is(mempoolErr, mempool.ErrTxNotFound) {
+				err = errorsmod.Wrapf(err, "mempool remove err: %s", mempoolErr.Error())
+			}
+		}()
+	}
+
 	// if the transaction is not decoded, decode it here
 	if tx == nil {
 		tx, err = app.txDecoder(txBytes)
@@ -1017,12 +1025,6 @@ func (app *BaseApp) runTxWithMultiStore(
 			return gInfo, nil, anteEvents, err
 		} else {
 			msCache.Write() // commit ante changes since we succeeded on tx insertion into mempool
-		}
-	} else if mode == execModeFinalize {
-		err = app.mempool.Remove(tx)
-		if err != nil && !errors.Is(err, mempool.ErrTxNotFound) {
-			return gInfo, nil, anteEvents,
-				fmt.Errorf("failed to remove tx from mempool: %w", err)
 		}
 	}
 
