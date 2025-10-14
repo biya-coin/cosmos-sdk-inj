@@ -124,14 +124,14 @@ func (s *decimalTestSuite) TestDecString() {
 		d    math.LegacyDec
 		want string
 	}{
-		{math.LegacyNewDec(0), "0.000000000000000000"},
-		{math.LegacyNewDec(1), "1.000000000000000000"},
-		{math.LegacyNewDec(10), "10.000000000000000000"},
-		{math.LegacyNewDec(12340), "12340.000000000000000000"},
-		{math.LegacyNewDecWithPrec(12340, 4), "1.234000000000000000"},
-		{math.LegacyNewDecWithPrec(12340, 5), "0.123400000000000000"},
-		{math.LegacyNewDecWithPrec(12340, 8), "0.000123400000000000"},
-		{math.LegacyNewDecWithPrec(1009009009009009009, 17), "10.090090090090090090"},
+		{math.LegacyNewDec(0), "0"},
+		{math.LegacyNewDec(1), "1"},
+		{math.LegacyNewDec(10), "10"},
+		{math.LegacyNewDec(12340), "12340"},
+		{math.LegacyNewDecWithPrec(12340, 4), "1.234"},
+		{math.LegacyNewDecWithPrec(12340, 5), "0.1234"},
+		{math.LegacyNewDecWithPrec(12340, 8), "0.0001234"},
+		{math.LegacyNewDecWithPrec(1009009009009009009, 17), "10.09009009009009009"},
 	}
 	for tcIndex, tc := range tests {
 		s.Require().Equal(tc.want, tc.d.String(), "bad String(), index: %v", tcIndex)
@@ -340,6 +340,30 @@ func (s *decimalTestSuite) TestTruncate() {
 	}
 }
 
+func (s *decimalTestSuite) TestParseFromString() {
+	tests := []struct {
+		sortable math.LegacyDec
+	}{
+		{math.LegacyMustNewDecFromStr("0")},
+		{math.LegacyMustNewDecFromStr("000000000000000001.000000000000000000")},
+		{math.LegacyMustNewDecFromStr("000000000000000010.000000000000000000")},
+		{math.LegacyMustNewDecFromStr("000000000000012340.000000000000000000")},
+		{math.LegacyMustNewDecFromStr("000000000000000001.234000000000000000")},
+		{math.LegacyMustNewDecFromStr("000000000000000000.123400000000000000")},
+		{math.LegacyMustNewDecFromStr("000000000000000000.000123400000000000")},
+		{math.LegacyMustNewDecFromStr("000000000000000010.090090090090090090")},
+		{math.LegacyMustNewDecFromStr("-000000000000000010.090090090090090090")},
+	}
+	for tcIndex, tc := range tests {
+		s.Require().NotEqual(tc.sortable.String(), string(math.LegacySortableDecBytes(tc.sortable)),
+			"sortable strings should differ from regular strings without trailing zeroes, tc %d", tcIndex)
+
+		parsed, err := math.LegacyNewDecFromStr(tc.sortable.String())
+		s.Require().NoError(err, "we should be able to parse regular string, tc %d", tcIndex)
+		s.Require().True(tc.sortable.Equal(parsed), "trailed numbers and sortable should be an equal decimal value, tc %d", tcIndex)
+	}
+}
+
 func (s *decimalTestSuite) TestStringOverflow() {
 	// two random 64 bit primes
 	dec1, err := math.LegacyNewDecFromStr("51643150036226787134389711697696177267")
@@ -348,7 +372,7 @@ func (s *decimalTestSuite) TestStringOverflow() {
 	s.Require().NoError(err)
 	dec3 := dec1.Add(dec2)
 	s.Require().Equal(
-		"19844653375691057515930281852116324640.000000000000000000",
+		"19844653375691057515930281852116324640",
 		dec3.String(),
 	)
 }
@@ -516,20 +540,20 @@ func (s *decimalTestSuite) TestDecEncoding() {
 	}{
 		{
 			math.LegacyNewDec(0), "30",
-			"\"0.000000000000000000\"",
-			"\"0.000000000000000000\"\n",
+			"\"0\"",
+			"\"0\"\n",
 		},
 		{
 			math.LegacyNewDecWithPrec(4, 2),
 			"3430303030303030303030303030303030",
-			"\"0.040000000000000000\"",
-			"\"0.040000000000000000\"\n",
+			"\"0.04\"",
+			"\"0.04\"\n",
 		},
 		{
 			math.LegacyNewDecWithPrec(-4, 2),
 			"2D3430303030303030303030303030303030",
-			"\"-0.040000000000000000\"",
-			"\"-0.040000000000000000\"\n",
+			"\"-0.04\"",
+			"\"-0.04\"\n",
 		},
 		{
 			math.LegacyNewDecWithPrec(1414213562373095049, 18),

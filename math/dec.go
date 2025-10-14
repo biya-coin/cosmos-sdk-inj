@@ -527,8 +527,37 @@ func (d LegacyDec) Format(s fmt.State, verb rune) {
 }
 
 func (d LegacyDec) String() string {
+	bzStr := d.bzString()
+
+	// remove trailing zeros
+	for i := len(bzStr) - 1; i >= 0 && bzStr[i] == '0'; i-- {
+		bzStr = bzStr[:i]
+	}
+	// remove decimal point if nothing follows it
+	if bzStr[len(bzStr)-1] == '.' {
+		bzStr = bzStr[:len(bzStr)-1]
+	}
+
+	if d.IsNegative() {
+		return "-" + string(bzStr)
+	}
+
+	return string(bzStr)
+}
+
+func (d LegacyDec) sortableString() string {
+	bzStr := d.bzString()
+
+	if d.IsNegative() {
+		return "-" + string(bzStr)
+	}
+
+	return string(bzStr)
+}
+
+func (d LegacyDec) bzString() []byte {
 	if d.i == nil {
-		return d.i.String()
+		return []byte(d.i.String())
 	}
 
 	isNeg := d.IsNegative()
@@ -539,13 +568,12 @@ func (d LegacyDec) String() string {
 
 	bzInt, err := d.i.MarshalText()
 	if err != nil {
-		return ""
+		return nil
 	}
 	inputSize := len(bzInt)
 
 	var bzStr []byte
 
-	// TODO: Remove trailing zeros
 	// case 1, purely decimal
 	if inputSize <= LegacyPrecision {
 		bzStr = make([]byte, LegacyPrecision+2)
@@ -571,11 +599,7 @@ func (d LegacyDec) String() string {
 		copy(bzStr[decPointPlace+1:], bzInt[decPointPlace:]) // post-decimal digits
 	}
 
-	if isNeg {
-		return "-" + string(bzStr)
-	}
-
-	return string(bzStr)
+	return bzStr
 }
 
 // Float64 returns the float64 representation of a Dec.
@@ -764,9 +788,9 @@ func LegacySortableDecBytes(dec LegacyDec) []byte {
 	}
 	// We move the negative sign to the front of all the left padded 0s, to make negative numbers come before positive numbers
 	if dec.IsNegative() {
-		return append([]byte("-"), []byte(fmt.Sprintf(fmt.Sprintf("%%0%ds", LegacyPrecision*2+1), dec.Abs().String()))...)
+		return append([]byte("-"), []byte(fmt.Sprintf(fmt.Sprintf("%%0%ds", LegacyPrecision*2+1), dec.Abs().sortableString()))...)
 	}
-	return []byte(fmt.Sprintf(fmt.Sprintf("%%0%ds", LegacyPrecision*2+1), dec.String()))
+	return []byte(fmt.Sprintf(fmt.Sprintf("%%0%ds", LegacyPrecision*2+1), dec.sortableString()))
 }
 
 // reuse nil values
