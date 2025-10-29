@@ -130,12 +130,12 @@ func NewTestPublishEvent(typ string, attributes map[string]string) *TestPublishE
 	}
 }
 
-func (b *TestPublishEvent) Serialize() []byte {
+func (b *TestPublishEvent) Serialize() ([]byte, error) {
 	bz, err := json.Marshal(b)
 	if err != nil {
-		panic(err)
+		return nil, fmt.Errorf("failed to marshal test publish event: %w", err)
 	}
-	return bz
+	return bz, nil
 }
 
 func (b *TestPublishEvent) ToString() string {
@@ -184,7 +184,7 @@ type Counter2ServerImpl struct {
 	t          *testing.T
 	capKey     storetypes.StoreKey
 	deliverKey []byte
-	
+
 	emitCustomEvent bool
 }
 

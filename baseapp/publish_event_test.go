@@ -26,8 +26,8 @@ func (e StringPublishEvent) ToString() string {
 	return e.data
 }
 
-func (e StringPublishEvent) Serialize() []byte {
-	return []byte(e.data)
+func (e StringPublishEvent) Serialize() ([]byte, error) {
+	return []byte(e.data), nil
 }
 
 func getStreamEventFlushChan(app *baseapp.BaseApp) chan baseapp.PublishEventFlush {

@@ -29,7 +29,7 @@ func (em *PublishEventManager) EmitEvents(events PublishEvents) {
 }
 
 type PublishEvent interface {
-	Serialize() []byte
+	Serialize() ([]byte, error)
 }
 
 type PublishEvents []PublishEvent
