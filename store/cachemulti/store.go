@@ -243,6 +243,10 @@ func (cms Store) Restore(other Store) {
 
 		store.(types.BranchStore).Restore(v.(types.BranchStore))
 	}
+
+	if other.memStore != nil {
+		other.memStore.Commit()
+	}
 }
 
 func (cms Store) RunAtomic(cb func(types.CacheMultiStore) error) error {
