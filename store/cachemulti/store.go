@@ -215,6 +215,7 @@ func (cms Store) Clone() Store {
 		traceWriter:  cms.traceWriter,
 		traceContext: cms.traceContext,
 		parentStore:  cms.parentStore,
+		memStore:     cms.memStore.Branch(),
 
 		branched: true,
 	}
