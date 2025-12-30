@@ -66,8 +66,13 @@ func (p *snapshotPool) Set(height int64, store types.MemStoreManager) {
 }
 
 func (p *snapshotPool) Limit(limit int64) {
+	if limit <= 0 {
+		panic("snapshot pool limit must be positive")
+	}
+
 	p.limit = limit
 	p.list = make([]*snapshotItem, limit)
+
 	for i := int64(0); i < limit; i++ {
 		p.list[i] = &snapshotItem{
 			mtx:    &sync.RWMutex{},
