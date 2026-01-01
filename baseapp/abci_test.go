@@ -368,11 +368,12 @@ func TestABCI_MemStoreWarmpup(t *testing.T) {
 			return sdk.EndBlock{}, nil
 		})
 
-		require.NoError(t, app.LoadLatestVersion())
-
+		// SetMemStoreManager must be called before LoadLatestVersion
 		memStoreManager := memstore.NewMemStoreManager()
 		cms := app.CommitMultiStore()
 		cms.SetMemStoreManager(memStoreManager)
+
+		require.NoError(t, app.LoadLatestVersion())
 
 		cacheMulti := cms.CacheMultiStore()
 

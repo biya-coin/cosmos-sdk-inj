@@ -20,6 +20,12 @@ var errKeyEmpty = errors.New("key cannot be empty")
 // we don't use MemDB here because cachekv is used extensively in sdk core path,
 // we need it to be as fast as possible, while `MemDB` is mainly used as a mocking db in unit tests.
 //
+// THREAD SAFETY: BTree is NOT thread-safe for concurrent mutations.
+// Each BTree instance should only be accessed by a single goroutine.
+// The Cosmos SDK ensures this by creating isolated branches (via Copy())
+// for each execution context. The copyLock only serializes Copy() calls,
+// not general access - this is intentional for performance.
+//
 // We choose tidwall/btree over google/btree here because it provides API to implement step iterator directly.
 type BTree struct {
 	tree     *btree.BTreeG[item[any]]

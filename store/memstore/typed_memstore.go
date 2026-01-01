@@ -96,9 +96,10 @@ func (ti *typedMemStoreIterator[T]) Key() []byte {
 	return ti.iter.Key()
 }
 
-// Value returns the current value as type T
+// Value returns the current value as type T.
+// Panics if the iterator is not valid.
 func (ti *typedMemStoreIterator[T]) Value() T {
-	val := ti.iter.Value()
+	val := ti.iter.Value() // Panics if invalid
 	if val == nil {
 		var zero T
 		return zero

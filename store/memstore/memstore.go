@@ -61,6 +61,14 @@ func (u *UncommittableMemStore) Commit() {
 	panic("uncommittable MemStore cannot be committed")
 }
 
+func (u *UncommittableMemStore) Set(key []byte, value any) {
+	panic("uncommittable MemStore cannot use set")
+}
+
+func (u *UncommittableMemStore) Delete(key []byte) {
+	panic("uncommittable MemStore cannot use delete")
+}
+
 // NewMemStoreManager creates a new empty memStoreManager.
 func NewMemStoreManager() *memStoreManager {
 	tree := internal.NewBTree()

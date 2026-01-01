@@ -225,7 +225,7 @@ type (
 		Key() []byte
 
 		// Value returns the current value as type T.
-		// If the iterator is not valid, returns the zero value of T.
+		// Panics if the iterator is not valid.
 		Value() T
 
 		// Close releases any resources associated with the iterator.

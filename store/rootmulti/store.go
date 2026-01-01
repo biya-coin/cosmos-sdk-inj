@@ -154,8 +154,17 @@ func (rs *Store) SetIAVLSyncPruning(syncPruning bool) {
 	rs.iavlSyncPruning = syncPruning
 }
 
+// SetMemStoreManager sets the MemStoreManager for the store.
+// This must be called before LoadVersion or LoadLatestVersion, as changing
+// the manager after initialization would leave memStore and memStoreManager
+// in an inconsistent state.
 func (rs *Store) SetMemStoreManager(memStoreManager types.MemStoreManager) {
+	if rs.lastCommitInfo != nil {
+		panic("SetMemStoreManager must be called before LoadVersion or LoadLatestVersion")
+	}
 	rs.memStoreManager = memStoreManager
+	isolatedMemStore := memStoreManager.Branch()
+	rs.memStore.Store(&isolatedMemStore)
 }
 
 func (rs *Store) SetSnapshotPoolLimit(limit int64) {

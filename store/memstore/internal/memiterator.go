@@ -104,18 +104,12 @@ func (mi *memIterator) keyInRange(key []byte) bool {
 }
 
 func (mi *memIterator) Key() []byte {
-	if !mi.Valid() {
-		return nil
-	}
-
+	mi.assertValid()
 	return mi.iter.Item().key
 }
 
 func (mi *memIterator) Value() any {
-	if !mi.Valid() {
-		return nil
-	}
-
+	mi.assertValid()
 	return mi.iter.Item().value
 }
 
