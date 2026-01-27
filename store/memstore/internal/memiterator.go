@@ -9,9 +9,8 @@ import (
 
 var _ TypedMemIterator[any] = (*memIterator)(nil)
 
-// memIterator iterates over iterKVCache items.
-// if value is nil, means it was deleted.
-// Implements Iterator.
+// memIterator iterates over BTree items in memstore.
+// Implements TypedMemIterator.
 type memIterator struct {
 	iter btree.IterG[item[any]]
 

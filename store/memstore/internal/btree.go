@@ -16,9 +16,7 @@ const (
 
 var errKeyEmpty = errors.New("key cannot be empty")
 
-// BTree implements the sorted cache for cachekv store,
-// we don't use MemDB here because cachekv is used extensively in sdk core path,
-// we need it to be as fast as possible, while `MemDB` is mainly used as a mocking db in unit tests.
+// BTree implements the sorted in-memory store for memstore.
 //
 // THREAD SAFETY: BTree is NOT thread-safe for concurrent mutations.
 // Each BTree instance should only be accessed by a single goroutine.
