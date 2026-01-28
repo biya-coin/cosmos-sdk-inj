@@ -157,14 +157,29 @@ type (
 	// TypedMemStore defines operations that can be performed on a memory store with generic type support.
 	// It provides type-safe access to values of type T, automatically handling type conversion.
 	// The interface is designed to allow for isolation of key spaces while maintaining type safety.
+	//
+	// IMPORTANT: Values stored in TypedMemStore are held by reference. Use View() for scoped
+	// read-only access, or GetCopy() to obtain a safe copy of the value.
 	TypedMemStore[T any] interface {
 		// Branch creates a nested TypedMemStore with the same type parameter.
 		// It creates an independent workspace that can be committed back to the parent.
 		Branch() TypedMemStore[T]
 
-		// Get retrieves a value for the given key and returns it as type T.
-		// If the key does not exist, returns the zero value of T.
-		Get(key []byte) T
+		// GetCopy retrieves a copy of the value for the given key.
+		// The copyFn is called with the stored value and should return a deep copy.
+		// If the key does not exist, returns the zero value of T (copyFn is not called).
+		//
+		// Example:
+		//   item := store.GetCopy(key, func(v *MyStruct) *MyStruct { return v.DeepCopy() })
+		GetCopy(key []byte, copyFn func(T) T) T
+
+		// View provides safe scoped access to a value. The value passed to the callback
+		// is only valid for the duration of the callback. If the key does not exist,
+		// the callback receives the zero value of T.
+		//
+		// If you need to use the value outside the callback, you must copy it.
+		// This pattern ensures callers are aware of the value's lifecycle.
+		View(key []byte, fn func(T) error) error
 
 		// Iterator returns an iterator over the key-value pairs within the specified range.
 		//
@@ -210,9 +225,20 @@ type (
 		// Panics if the iterator is not valid.
 		Key() []byte
 
-		// Value returns the current value as type T.
+		// ValueCopy returns a copy of the current value.
+		// The copyFn is called with the stored value and should return a deep copy.
 		// Panics if the iterator is not valid.
-		Value() T
+		//
+		// Example:
+		//   item := iter.ValueCopy(func(v *MyStruct) *MyStruct { return v.DeepCopy() })
+		ValueCopy(copyFn func(T) T) T
+
+		// ViewValue provides safe scoped access to the current value. The value passed
+		// to the callback is only valid for the duration of the callback.
+		// Panics if the iterator is not valid.
+		//
+		// If you need to use the value outside the callback, you must copy it.
+		ViewValue(fn func(T) error) error
 
 		// Close releases any resources associated with the iterator.
 		// It must be called when done using the iterator.

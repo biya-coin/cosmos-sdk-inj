@@ -28,15 +28,28 @@ func (t *typedMemStore[T]) Branch() types.TypedMemStore[T] {
 	return NewTypedMemStore[T](t.MemStore.Branch())
 }
 
-// Get retrieves a value for the given key and converts it to type T
-func (t *typedMemStore[T]) Get(key []byte) T {
+// GetCopy retrieves a copy of the value for the given key.
+// The copyFn is called with the stored value and should return a deep copy.
+// If the key does not exist, returns the zero value of T (copyFn is not called).
+func (t *typedMemStore[T]) GetCopy(key []byte, copyFn func(T) T) T {
 	val := t.MemStore.Get(key)
 	if val == nil {
 		var zero T
 		return zero
 	}
+	return copyFn(val.(T))
+}
 
-	return val.(T)
+// View provides safe scoped access to a value. The value passed to the callback
+// is only valid for the duration of the callback. If the key does not exist,
+// the callback receives the zero value of T.
+func (t *typedMemStore[T]) View(key []byte, fn func(T) error) error {
+	val := t.MemStore.Get(key)
+	if val == nil {
+		var zero T
+		return fn(zero)
+	}
+	return fn(val.(T))
 }
 
 // Set adds or updates a key-value pair
@@ -96,16 +109,27 @@ func (ti *typedMemStoreIterator[T]) Key() []byte {
 	return ti.iter.Key()
 }
 
-// Value returns the current value as type T.
+// ValueCopy returns a copy of the current value.
+// The copyFn is called with the stored value and should return a deep copy.
 // Panics if the iterator is not valid.
-func (ti *typedMemStoreIterator[T]) Value() T {
+func (ti *typedMemStoreIterator[T]) ValueCopy(copyFn func(T) T) T {
 	val := ti.iter.Value() // Panics if invalid
 	if val == nil {
 		var zero T
 		return zero
 	}
+	return copyFn(val.(T))
+}
 
-	return val.(T)
+// ViewValue provides safe scoped access to the current value.
+// Panics if the iterator is not valid.
+func (ti *typedMemStoreIterator[T]) ViewValue(fn func(T) error) error {
+	val := ti.iter.Value() // Panics if invalid
+	if val == nil {
+		var zero T
+		return fn(zero)
+	}
+	return fn(val.(T))
 }
 
 // Close releases any resources associated with the iterator
