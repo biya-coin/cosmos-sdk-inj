@@ -163,7 +163,8 @@ func (b *memStore) Get(key []byte) any {
 //
 // If an error occurs during initialization, this method panics.
 func (b *memStore) Iterator(start, end []byte) types.MemStoreIterator {
-	// NOTE: If a snapshot is not created, the current BTree cannot be modified until the Iterator is closed.
+	// Create a snapshot for stable iteration (snapshot isolation).
+	// Writes made after this point won't be visible to the iterator.
 	snapshot := b.current.Copy()
 
 	iter, err := snapshot.Iterator(start, end)
@@ -183,7 +184,8 @@ func (b *memStore) Iterator(start, end []byte) types.MemStoreIterator {
 //
 // If an error occurs during initialization, this method panics.
 func (b *memStore) ReverseIterator(start, end []byte) types.MemStoreIterator {
-	// NOTE: If a snapshot is not created, the current BTree cannot be modified until the Iterator is closed.
+	// Create a snapshot for stable iteration (snapshot isolation).
+	// Writes made after this point won't be visible to the iterator.
 	snapshot := b.current.Copy()
 
 	iter, err := snapshot.ReverseIterator(start, end)
