@@ -51,23 +51,7 @@ type (
 		// manager is a reference to the parent memStoreManager, used by top-level branches to update the manager during commit.
 		manager *memStoreManager
 	}
-
-	UncommittableMemStore struct {
-		types.MemStore
-	}
 )
-
-func (u *UncommittableMemStore) Commit() {
-	panic("uncommittable MemStore cannot be committed")
-}
-
-func (u *UncommittableMemStore) Set(key []byte, value any) {
-	panic("uncommittable MemStore cannot use set")
-}
-
-func (u *UncommittableMemStore) Delete(key []byte) {
-	panic("uncommittable MemStore cannot use delete")
-}
 
 // NewMemStoreManager creates a new empty memStoreManager.
 func NewMemStoreManager() *memStoreManager {
@@ -92,18 +76,24 @@ func (t *memStoreManager) SetSnapshotPoolLimit(limit int64) {
 	t.snapshotPool.Limit(limit)
 }
 
-// Committing a branch created here is unsafe.
+// GetSnapshotBranch retrieves a read-only view of the state at the given height.
+// The snapshot btree is stored directly in the pool. Each call returns
+// a new memStore with a copy-on-write snapshot, ensuring isolation between callers.
+// The returned memStore has no manager, so top-level Commit() will panic.
 func (t *memStoreManager) GetSnapshotBranch(height int64) (types.MemStore, bool) {
-	reader, ok := t.snapshotPool.Get(height)
+	snapshotTree, ok := t.snapshotPool.Get(height)
 	if !ok {
 		return nil, false
 	}
 
-	branch := reader.Branch()
-	// The snapshot branch is a branch type used in CacheMultiStoreWithVersion(..).
-	// Since it handles data for queries at past heights, it is immutable.
-	// Therefore, Commit() cannot be performed.
-	return &UncommittableMemStore{branch}, true
+	// Create a copy-on-write copy of the snapshot tree for isolation.
+	// Each caller gets their own copy that won't affect the stored snapshot.
+	return &memStore{
+		parent:  nil,
+		current: snapshotTree.Copy(),
+		base:    nil,
+		manager: nil,
+	}, true
 }
 
 // Branch creates a top-level branch.
@@ -157,18 +147,10 @@ func (t *memStoreManager) Commit(height int64) {
 	t.current = copiedTree
 	t.base.Store(current)
 
+	// Store the snapshot btree directly - no need to wrap in memStoreManager.
+	// GetSnapshotBranch will create a memStore from this when needed.
 	snapshotTree := copiedTree.Copy()
-
-	root := &atomic.Pointer[btree]{}
-	root.Store(snapshotTree)
-
-	t.snapshotPool.Set(height, &memStoreManager{
-		root:    root,
-		current: nil, // Trees stored in the snapshot pool cannot be committed
-		base:    nil,
-
-		snapshotPool: nil,
-	})
+	t.snapshotPool.Set(height, snapshotTree)
 }
 
 // Get retrieves a value for the given key from the current branch.

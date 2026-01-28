@@ -25,7 +25,7 @@ type (
 		// GetSnapshotBranch retrieves a MemStore representing the state at a specific
 		// past height, if available in the snapshot pool.
 		// The returned MemStore provides a read-only view of that historical state
-		// and typically cannot be committed (often wrapped in an UncommittableMemStore).
+		// and typically cannot be committed.
 		// Returns the MemStore and true if found, otherwise nil and false.
 		GetSnapshotBranch(height int64) (MemStore, bool)
 
@@ -148,24 +148,6 @@ type (
 		// Close releases any resources associated with the iterator.
 		// It must be called when done using the iterator.
 		Close() error
-	}
-
-	// SnapshotPool defines an interface for storing and retrieving historical
-	// versions (snapshots) of MemStoreManager states, typically keyed by block height.
-	// Implementations may enforce limits on the number of snapshots stored.
-	SnapshotPool interface {
-		// Get retrieves a MemStoreManager representing the state at a specific height.
-		// Returns the manager and true if found, otherwise nil and false.
-		Get(height int64) (MemStoreManager, bool)
-
-		// Set stores a MemStoreManager representing the state at a specific height.
-		// If a manager for this height already exists, it might be overwritten.
-		Set(height int64, store MemStoreManager)
-
-		// Limit sets the maximum number of snapshots the pool should retain.
-		// Implementations may use LRU or other strategies for pruning when the
-		// limit is exceeded.
-		Limit(length int64)
 	}
 
 	// TypedMemStore defines operations that can be performed on a memory store with generic type support.

@@ -3,7 +3,7 @@ package memstore
 import (
 	"sync"
 
-	"cosmossdk.io/store/types"
+	"cosmossdk.io/store/memstore/internal"
 )
 
 type (
@@ -13,16 +13,16 @@ type (
 	}
 
 	SnapshotPool interface {
-		Get(height int64) (types.MemStoreManager, bool)
+		Get(height int64) (*internal.BTree, bool)
 
-		Set(height int64, store types.MemStoreManager)
+		Set(height int64, tree *internal.BTree)
 
 		Limit(length int64)
 	}
 
 	snapshotItem struct {
 		mtx    *sync.RWMutex
-		store  types.MemStoreManager
+		tree   *internal.BTree
 		height int64
 	}
 )
@@ -34,7 +34,7 @@ func newSnapshotPool() *snapshotPool {
 	for i := 0; i < defaultLimit; i++ {
 		list[i] = &snapshotItem{
 			mtx:    &sync.RWMutex{},
-			store:  nil,
+			tree:   nil,
 			height: 0,
 		}
 	}
@@ -42,7 +42,7 @@ func newSnapshotPool() *snapshotPool {
 	return &snapshotPool{defaultLimit, list}
 }
 
-func (p *snapshotPool) Get(height int64) (types.MemStoreManager, bool) {
+func (p *snapshotPool) Get(height int64) (*internal.BTree, bool) {
 	idx := height % p.limit
 
 	p.list[idx].mtx.RLock()
@@ -53,14 +53,14 @@ func (p *snapshotPool) Get(height int64) (types.MemStoreManager, bool) {
 		return nil, false
 	}
 
-	return item.store, item.store != nil
+	return item.tree, item.tree != nil
 }
 
-func (p *snapshotPool) Set(height int64, store types.MemStoreManager) {
+func (p *snapshotPool) Set(height int64, tree *internal.BTree) {
 	idx := height % p.limit
 
 	p.list[idx].mtx.Lock()
-	p.list[idx].store = store
+	p.list[idx].tree = tree
 	p.list[idx].height = height
 	p.list[idx].mtx.Unlock()
 }
@@ -76,7 +76,7 @@ func (p *snapshotPool) Limit(limit int64) {
 	for i := int64(0); i < limit; i++ {
 		p.list[i] = &snapshotItem{
 			mtx:    &sync.RWMutex{},
-			store:  nil,
+			tree:   nil,
 			height: 0,
 		}
 	}
