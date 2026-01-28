@@ -550,19 +550,6 @@ func (rs *Store) Commit() types.CommitID {
 	}()
 
 	rs.lastCommitInfo.Timestamp = rs.commitHeader.Time
-	defer rs.flushMetadata(rs.db, version, rs.lastCommitInfo)
-
-	defer func() {
-		height := rs.lastCommitInfo.Version
-		current := rs.memStore.Load()
-		(*current).Commit()
-		rs.memStoreManager.Commit(height)
-		// Create a new isolated memstore for the next block and replace the current one
-		newIsolatedMemStore := rs.memStoreManager.Branch()
-		if !rs.memStore.CompareAndSwap(current, &newIsolatedMemStore) {
-			panic("memStore pointer swap failed - current pointer was changed concurrently")
-		}
-	}()
 
 	// remove remnants of removed stores
 	for sk := range rs.removalMap {
@@ -582,6 +569,16 @@ func (rs *Store) Commit() types.CommitID {
 			"err", err,
 		)
 	}
+
+	current := rs.memStore.Load()
+	(*current).Commit()
+	rs.memStoreManager.Commit(version)
+	newIsolatedMemStore := rs.memStoreManager.Branch()
+	if !rs.memStore.CompareAndSwap(current, &newIsolatedMemStore) {
+		panic("memStore pointer swap failed - current pointer was changed concurrently")
+	}
+
+	rs.flushMetadata(rs.db, version, rs.lastCommitInfo)
 
 	return types.CommitID{
 		Version: version,
