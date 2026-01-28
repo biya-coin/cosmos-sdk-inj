@@ -80,8 +80,10 @@ type Store struct {
 	commitHeader      cmtproto.Header
 
 	memStoreManager types.MemStoreManager
-	// memStore holds the pre-isolated memstore instance created during setState.
-	// It uses atomic.Pointer for thread-safe access without requiring explicit locking.
+	// memStore is the L1 branch that accumulates all in-memory state changes during a block.
+	// CacheMultiStore creates L2 branches from this. At block commit, the L1 is committed
+	// to the manager and replaced with a fresh branch for the next block.
+	// Uses atomic.Pointer for lock-free reads during CacheMultiStore creation.
 	memStore atomic.Pointer[types.MemStore]
 }
 
