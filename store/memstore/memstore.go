@@ -73,7 +73,7 @@ func NewMemStoreManager() *memStoreManager {
 }
 
 func (t *memStoreManager) SetSnapshotPoolLimit(limit int64) {
-	t.snapshotPool.Limit(limit)
+	t.snapshotPool.ResizeAndClear(limit)
 }
 
 // GetSnapshotBranch retrieves a read-only view of the state at the given height.
@@ -227,6 +227,10 @@ func (b *memStore) Branch() types.MemStore {
 // Commit applies the changes in the branch:
 // - For nested branches, it updates the parent branch's current pointer.
 // - For top-level branches, it updates memStoreManager.current with the branch's current btree.
+//
+// WARNING: For nested branches, this is a full replacement, not a merge.
+// Any writes made to the parent AFTER creating this branch will be lost.
+// Always ensure all writes go through the child branch, not the parent.
 func (b *memStore) Commit() {
 	if b.parent != nil {
 		// nested branch: update parent's current pointer

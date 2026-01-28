@@ -17,7 +17,7 @@ type (
 
 		Set(height int64, tree *internal.BTree)
 
-		Limit(length int64)
+		ResizeAndClear(limit int64)
 	}
 
 	snapshotItem struct {
@@ -65,7 +65,9 @@ func (p *snapshotPool) Set(height int64, tree *internal.BTree) {
 	p.list[idx].mtx.Unlock()
 }
 
-func (p *snapshotPool) Limit(limit int64) {
+// ResizeAndClear changes the pool capacity and clears all existing snapshots.
+// This should typically only be called during initialization.
+func (p *snapshotPool) ResizeAndClear(limit int64) {
 	if limit <= 0 {
 		panic("snapshot pool limit must be positive")
 	}
