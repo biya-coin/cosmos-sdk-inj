@@ -137,20 +137,16 @@ func (t *memStoreManager) Commit(height int64) {
 	current := t.current
 
 	if current == nil {
-		panic("`MemStore.Commit(..)` should not be called on an memstore retrieved from the snapshot pool.")
+		panic("No current BTree to commit")
 	}
 
-	copiedTree := current.Copy()
 	if !t.root.CompareAndSwap(t.base.Load(), current) {
 		panic("commit failed: concurrent modification detected")
 	}
-	t.current = copiedTree
 	t.base.Store(current)
 
-	// Store the snapshot btree directly - no need to wrap in memStoreManager.
-	// GetSnapshotBranch will create a memStore from this when needed.
-	snapshotTree := copiedTree.Copy()
-	t.snapshotPool.Set(height, snapshotTree)
+	t.current = current
+	t.snapshotPool.Set(height, current.Copy())
 }
 
 // Get retrieves a value for the given key from the current branch.
