@@ -57,6 +57,12 @@ func (b *prefixMemStore) Commit() {
 	b.parent.Commit()
 }
 
+// IsChildOf returns true if this memStore's parent was created by calling Branch()
+// on the given parent MemStore.
+func (b *prefixMemStore) IsChildOf(parent types.MemStore) bool {
+	return b.parent.IsChildOf(parent)
+}
+
 // Branch creates a nested branch
 func (b *prefixMemStore) Branch() types.MemStore {
 	return &prefixMemStore{

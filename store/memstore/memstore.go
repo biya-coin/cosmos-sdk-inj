@@ -102,6 +102,19 @@ func (b *memStore) Branch() types.MemStore {
 	}
 }
 
+// IsChildOf returns true if this memStore was created by calling Branch()
+// on the given parent memStore.
+func (b *memStore) IsChildOf(parent types.MemStore) bool {
+	if b.parent == nil {
+		return false
+	}
+	parentMs, ok := parent.(*memStore)
+	if !ok {
+		return false
+	}
+	return b.parent == parentMs
+}
+
 // Commit applies the changes in the branch:
 // - For nested branches, it updates the parent branch's current pointer.
 // - For top-level branches, it updates memStoreManager.current with the branch's current btree.

@@ -210,12 +210,16 @@ func (cms Store) Clone() Store {
 	for k, v := range cms.stores {
 		stores[k] = v.(types.BranchStore).Clone().(types.CacheWrap)
 	}
+	var memStoreBranch types.MemStore
+	if cms.memStore != nil {
+		memStoreBranch = cms.memStore.Branch()
+	}
 	return Store{
 		stores:       stores,
 		traceWriter:  cms.traceWriter,
 		traceContext: cms.traceContext,
 		parentStore:  cms.parentStore,
-		memStore:     cms.memStore.Branch(),
+		memStore:     memStoreBranch,
 
 		branched: true,
 	}
@@ -245,6 +249,9 @@ func (cms Store) Restore(other Store) {
 	}
 
 	if other.memStore != nil {
+		if !other.memStore.IsChildOf(cms.memStore) {
+			panic("cannot restore: other.memStore is not a child of cms.memStore")
+		}
 		other.memStore.Commit()
 	}
 }

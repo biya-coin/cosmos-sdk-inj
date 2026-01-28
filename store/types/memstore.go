@@ -118,6 +118,10 @@ type (
 		// is called on the nested branch.
 		Branch() MemStore
 
+		// IsChildOf returns true if this MemStore was created by calling Branch()
+		// on the given parent MemStore.
+		IsChildOf(parent MemStore) bool
+
 		MemStoreReader
 		MemStoreWriter
 	}

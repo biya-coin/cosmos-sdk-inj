@@ -47,3 +47,7 @@ func (u *unusableMemstore) Delete(key []byte) {
 func (u *unusableMemstore) Commit() {
 	panic(fmt.Sprintf("no %d height memstore snapshot", u.height))
 }
+
+func (u *unusableMemstore) IsChildOf(parent types.MemStore) bool {
+	return false
+}
