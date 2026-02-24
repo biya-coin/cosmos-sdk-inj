@@ -120,6 +120,6 @@ func (t *memStoreManager) Commit(height int64) {
 	}
 	t.base.Store(current)
 
-	t.current = current
+	t.current = current.Copy() // copy as defensive measure to prevent accidental mutations after commit
 	t.snapshotPool.Set(height, current.Copy())
 }
