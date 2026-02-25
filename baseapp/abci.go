@@ -436,6 +436,15 @@ func (app *BaseApp) PrepareProposal(req *abci.PrepareProposalRequest) (resp *abc
 		return nil, errors.New("PrepareProposal called with invalid height")
 	}
 
+	// metrics and trace
+	heightStr := strconv.Itoa(int(req.Height))
+	sdkCtx := app.prepareProposalState.Context()
+	defer app.meter.FuncTiming(&sdkCtx, "PrepareProposal", metrics.Tag("height", req.Height))(&err)
+	if app.traceFlightRecorder != nil {
+		defer app.traceFlightRecorder.StartRegion("prepare-proposal", heightStr)()
+	}
+	app.prepareProposalState.SetContext(sdkCtx)
+
 	app.prepareProposalState.SetContext(app.getContextForProposal(app.prepareProposalState.Context(), req.Height).
 		WithVoteInfos(toVoteInfo(req.LocalLastCommit.Votes)). // this is a set of votes that are not finalized yet, wait for commit
 		WithBlockHeight(req.Height).
@@ -530,7 +539,7 @@ func (app *BaseApp) ProcessProposal(req *abci.ProcessProposalRequest) (resp *abc
 	// metrics and trace
 	heightStr := strconv.Itoa(int(req.Height))
 	sdkCtx := app.processProposalState.Context()
-	defer app.meter.FuncTiming(&sdkCtx, "ProcessProposal", metrics.Tag("height", req.Height))()
+	defer app.meter.FuncTiming(&sdkCtx, "ProcessProposal", metrics.Tag("height", req.Height))(&err)
 	if app.traceFlightRecorder != nil {
 		defer app.traceFlightRecorder.StartRegion("process-proposal", heightStr)()
 	}
@@ -745,7 +754,7 @@ func (app *BaseApp) VerifyVoteExtension(req *abci.VerifyVoteExtensionRequest) (r
 // Execution flow or by the FinalizeBlock ABCI method. The context received is
 // only used to handle early cancellation, for anything related to state app.finalizeBlockState.Context()
 // must be used.
-func (app *BaseApp) internalFinalizeBlock(ctx context.Context, req *abci.FinalizeBlockRequest) (*abci.FinalizeBlockResponse, error) {
+func (app *BaseApp) internalFinalizeBlock(ctx context.Context, req *abci.FinalizeBlockRequest) (res *abci.FinalizeBlockResponse, err error) {
 	var events []abci.Event
 
 	if err := app.checkHalt(req.Height, req.Time); err != nil {
@@ -781,7 +790,7 @@ func (app *BaseApp) internalFinalizeBlock(ctx context.Context, req *abci.Finaliz
 	// metrics and trace
 	heightStr := strconv.Itoa(int(req.Height))
 	sdkCtx := app.finalizeBlockState.Context()
-	defer app.meter.FuncTiming(&sdkCtx, "internalFinalizeBlock", metrics.Tag("height", req.Height))()
+	defer app.meter.FuncTiming(&sdkCtx, "internalFinalizeBlock", metrics.Tag("height", req.Height))(&err)
 	if app.traceFlightRecorder != nil {
 		defer app.traceFlightRecorder.StartRegion("finalize-block", heightStr)()
 	}
