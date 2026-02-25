@@ -901,6 +901,8 @@ func (app *BaseApp) runTxWithMultiStore(
 	}
 	ms := ctx.MultiStore()
 
+	defer ctx.Meter().FuncTiming(&ctx, "runTx", metrics.Tag("mode", int64(mode)))(&err)
+
 	// only run the tx if there is block gas remaining
 	if mode == execModeFinalize && ctx.BlockGasMeter().IsOutOfGas() {
 		return gInfo, nil, nil, errorsmod.Wrap(sdkerrors.ErrOutOfGas, "no block gas left to run tx")
