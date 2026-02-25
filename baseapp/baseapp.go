@@ -7,7 +7,6 @@ import (
 	"math"
 	"sort"
 	"strconv"
-	"strings"
 
 	"github.com/InjectiveLabs/metrics/v2"
 	"github.com/InjectiveLabs/metrics/v2/flightrecorder"
@@ -904,7 +903,7 @@ func (app *BaseApp) runTxWithMultiStore(
 	}
 	ms := ctx.MultiStore()
 
-	txHash := strings.ToUpper(hex.EncodeToString(comettypes.Tx(txBytes).Hash()))
+	txHash := hex.EncodeToString(comettypes.Tx(txBytes).Hash())
 	defer ctx.Meter().FuncTiming(&ctx, "runTx", metrics.Tag("mode", int64(mode)), metrics.Tag("tx_hash", txHash))(&err)
 
 	// only run the tx if there is block gas remaining
