@@ -115,11 +115,16 @@ func (t *memStoreManager) Commit(height int64) {
 		panic("No current BTree to commit")
 	}
 
+	// copy as defensive measure to prevent accidental mutations after commit
+	copiedTree := current.Copy()
+
 	if !t.root.CompareAndSwap(t.base.Load(), current) {
 		panic("commit failed: concurrent modification detected")
 	}
 	t.base.Store(current)
 
-	t.current = current.Copy() // copy as defensive measure to prevent accidental mutations after commit
-	t.snapshotPool.Set(height, current.Copy())
+	t.current = copiedTree
+
+	snapshotTree := copiedTree.Copy()
+	t.snapshotPool.Set(height, snapshotTree)
 }
