@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/InjectiveLabs/metrics"
+	"github.com/InjectiveLabs/metrics/v2"
 	"github.com/cockroachdb/errors"
 	abci "github.com/cometbft/cometbft/abci/types"
 	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v1"
@@ -529,12 +529,12 @@ func (app *BaseApp) ProcessProposal(req *abci.ProcessProposalRequest) (resp *abc
 
 	// metrics and trace
 	heightStr := strconv.Itoa(int(req.Height))
-	metricsCtx, doneFn := metrics.ReportFuncCallAndTimingSdkCtx(app.processProposalState.Context(), metrics.Tags{"svc": "app", "height": heightStr})
-	defer doneFn()
+	sdkCtx := app.processProposalState.Context()
+	defer app.meter.FuncTiming(&sdkCtx, "ProcessProposal", metrics.Tag("height", req.Height))()
 	if app.traceFlightRecorder != nil {
 		defer app.traceFlightRecorder.StartRegion("process-proposal", heightStr)()
 	}
-	app.processProposalState.SetContext(metricsCtx)
+	app.processProposalState.SetContext(sdkCtx)
 
 	app.processProposalState.SetContext(app.getContextForProposal(app.processProposalState.Context(), req.Height).
 		WithVoteInfos(req.ProposedLastCommit.Votes). // this is a set of votes that are not finalized yet, wait for commit
@@ -780,12 +780,12 @@ func (app *BaseApp) internalFinalizeBlock(ctx context.Context, req *abci.Finaliz
 
 	// metrics and trace
 	heightStr := strconv.Itoa(int(req.Height))
-	metricsCtx, doneFn := metrics.ReportFuncCallAndTimingSdkCtx(app.finalizeBlockState.Context(), metrics.Tags{"svc": "app", "height": heightStr})
-	defer doneFn()
+	sdkCtx := app.finalizeBlockState.Context()
+	defer app.meter.FuncTiming(&sdkCtx, "internalFinalizeBlock", metrics.Tag("height", req.Height))()
 	if app.traceFlightRecorder != nil {
 		defer app.traceFlightRecorder.StartRegion("finalize-block", heightStr)()
 	}
-	app.finalizeBlockState.SetContext(metricsCtx)
+	app.finalizeBlockState.SetContext(sdkCtx)
 
 	// Context is now updated with Header information.
 	app.finalizeBlockState.SetContext(app.finalizeBlockState.Context().
