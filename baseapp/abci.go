@@ -414,7 +414,7 @@ func (app *BaseApp) PrepareProposal(req *abci.PrepareProposalRequest) (resp *abc
 	sdkCtx := app.prepareProposalState.Context()
 	defer app.meter.FuncTiming(&sdkCtx, "PrepareProposal", metrics.Tag("height", req.Height))(&err)
 	if app.traceFlightRecorder != nil {
-		defer app.traceFlightRecorder.StartRegion("process-proposal", heightStr)()
+		defer app.traceFlightRecorder.StartRegion("prepare-proposal", heightStr)()
 	}
 	app.prepareProposalState.SetContext(sdkCtx)
 
