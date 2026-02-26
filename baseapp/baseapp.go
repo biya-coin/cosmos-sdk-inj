@@ -18,6 +18,7 @@ import (
 	comettypes "github.com/cometbft/cometbft/types"
 	dbm "github.com/cosmos/cosmos-db"
 	"github.com/cosmos/gogoproto/proto"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/exp/maps"
 	protov2 "google.golang.org/protobuf/proto"
 
@@ -920,6 +921,7 @@ func (app *BaseApp) runTxWithMultiStore(
 
 	txHash := hex.EncodeToString(comettypes.Tx(txBytes).Hash())
 	defer ctx.Meter().FuncTiming(&ctx, "runTx", metrics.Tag("mode", int64(mode)), metrics.Tag("tx_hash", txHash))(&err)
+	metricsRunTxSpan := trace.SpanFromContext(ctx)
 
 	// only run the tx if there is block gas remaining
 	if mode == execModeFinalize && ctx.BlockGasMeter().IsOutOfGas() {
@@ -1050,6 +1052,10 @@ func (app *BaseApp) runTxWithMultiStore(
 	// in case message processing fails. At this point, the MultiStore
 	// is a branch of a branch.
 	runMsgCtx, msCache := app.cacheTxContext(ctx, txBytes)
+
+	// replace tracing span with initial runTx span since ctx now has the span of last ante handler
+	spanCtx := runMsgCtx.ContextPtr()
+	*spanCtx = trace.ContextWithSpan(*spanCtx, metricsRunTxSpan)
 
 	// Attempt to execute all messages and only update state if all messages pass
 	// and we're in DeliverTx. Note, runMsgs will never return a reference to a
