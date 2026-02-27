@@ -790,7 +790,7 @@ func (app *BaseApp) internalFinalizeBlock(ctx context.Context, req *abci.Finaliz
 	// metrics and trace
 	heightStr := strconv.Itoa(int(req.Height))
 	sdkCtx := app.finalizeBlockState.Context()
-	defer app.meter.FuncTiming(&sdkCtx, "internalFinalizeBlock", metrics.Tag("height", req.Height))(&err)
+	defer app.meter.FuncTiming(&sdkCtx, "internalFinalizeBlock", metrics.TraceTag("height", req.Height))(&err)
 	if app.traceFlightRecorder != nil {
 		defer app.traceFlightRecorder.StartRegion("finalize-block", heightStr)()
 	}

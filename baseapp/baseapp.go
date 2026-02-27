@@ -920,7 +920,7 @@ func (app *BaseApp) runTxWithMultiStore(
 	ms := ctx.MultiStore()
 
 	txHash := hex.EncodeToString(comettypes.Tx(txBytes).Hash())
-	defer ctx.Meter().FuncTiming(&ctx, "runTx", metrics.Tag("mode", int64(mode)), metrics.Tag("tx_hash", txHash))(&err)
+	defer ctx.Meter().FuncTiming(&ctx, "runTx", metrics.Tag("mode", int64(mode)), metrics.TraceTag("tx_hash", txHash))(&err)
 	metricsRunTxSpan := trace.SpanFromContext(ctx)
 
 	// only run the tx if there is block gas remaining
