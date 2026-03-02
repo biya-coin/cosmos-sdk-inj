@@ -5,7 +5,8 @@ import (
 	"io"
 	"math"
 
-	"github.com/InjectiveLabs/metrics"
+	"github.com/InjectiveLabs/metrics/v2"
+	"github.com/InjectiveLabs/metrics/v2/flightrecorder"
 	dbm "github.com/cosmos/cosmos-db"
 
 	sdkmetrics "cosmossdk.io/store/metrics"
@@ -416,12 +417,24 @@ func (app *BaseApp) SetSnapshotPoolLimit(limit int64) {
 	app.cms.SetSnapshotPoolLimit(limit)
 }
 
-func (app *BaseApp) SetTraceFlightRecorder(tr *metrics.TraceRecorder) {
+func (app *BaseApp) SetTraceFlightRecorder(tr flightrecorder.TraceFlightRecorder) {
 	app.traceFlightRecorder = tr
 }
 
-func SetTraceFlightRecorder(tr *metrics.TraceRecorder) func(*BaseApp) {
+func SetTraceFlightRecorder(tr flightrecorder.TraceFlightRecorder) func(*BaseApp) {
 	return func(app *BaseApp) { app.traceFlightRecorder = tr }
+}
+
+func (app *BaseApp) SetMeter(m metrics.Meter) {
+	app.meter = m
+}
+
+func (app *BaseApp) Meter() metrics.Meter {
+	return app.meter
+}
+
+func SetMeter(m metrics.Meter) func(*BaseApp) {
+	return func(app *BaseApp) { app.meter = m }
 }
 
 // SetTxResultsPostHook is used to set txResultsPostHook.

@@ -2,16 +2,19 @@ package baseapp
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"sort"
 	"strconv"
 
-	"github.com/InjectiveLabs/metrics"
+	"github.com/InjectiveLabs/metrics/v2"
+	"github.com/InjectiveLabs/metrics/v2/flightrecorder"
 	"github.com/cockroachdb/errors"
 	abci "github.com/cometbft/cometbft/abci/types"
 	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v1"
 	"github.com/cometbft/cometbft/crypto/tmhash"
+	comettypes "github.com/cometbft/cometbft/types"
 	dbm "github.com/cosmos/cosmos-db"
 	"github.com/cosmos/gogoproto/proto"
 	"golang.org/x/exp/maps"
@@ -207,13 +210,15 @@ type BaseApp struct {
 	EnableStreamer bool
 	StreamEvents   chan StreamEvents
 
-	traceFlightRecorder *metrics.TraceRecorder
+	traceFlightRecorder flightrecorder.TraceFlightRecorder
 
 	// txResultsPostHook can be used to alter TxResults inside block results,
 	// For example, to fix EVM transaction logs and put correct tx and msg indexes in them, since
 	// we can't do that during execution of individual messages (we do not track indexes throughout block execution,
 	// thus can only fix them after block is ready)
 	txResultsPostHook TxResultsPostHook
+
+	meter metrics.Meter
 }
 
 // NewBaseApp returns a reference to an initialized BaseApp. It accepts a
@@ -235,6 +240,7 @@ func NewBaseApp(
 		sigverifyTx:      true,
 		queryGasLimit:    math.MaxUint64,
 		StreamEvents:     make(chan StreamEvents),
+		meter:            metrics.NewNilMeter(),
 	}
 
 	for _, option := range options {
@@ -523,7 +529,8 @@ func (app *BaseApp) setState(mode execMode, h cmtproto.Header) {
 		ms: ms,
 		ctx: sdk.NewContext(ms, h, false, app.logger).
 			WithStreamingManager(app.streamingManager).
-			WithHeaderInfo(headerInfo),
+			WithHeaderInfo(headerInfo).
+			WithMeter(app.meter),
 	}
 
 	switch mode {
@@ -895,6 +902,9 @@ func (app *BaseApp) runTxWithMultiStore(
 		ctx = ctx.WithMultiStore(txMultiStore)
 	}
 	ms := ctx.MultiStore()
+
+	txHash := hex.EncodeToString(comettypes.Tx(txBytes).Hash())
+	defer ctx.Meter().FuncTiming(&ctx, "runTx", metrics.Tag("mode", int64(mode)), metrics.Tag("tx_hash", txHash))(&err)
 
 	// only run the tx if there is block gas remaining
 	if mode == execModeFinalize && ctx.BlockGasMeter().IsOutOfGas() {

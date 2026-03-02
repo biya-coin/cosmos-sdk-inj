@@ -14,6 +14,7 @@ import (
 	"cosmossdk.io/store/gaskv"
 	"cosmossdk.io/store/prefix"
 	storetypes "cosmossdk.io/store/types"
+	"github.com/InjectiveLabs/metrics/v2"
 )
 
 // ExecMode defines the execution mode which can be set on a Context.
@@ -66,6 +67,7 @@ type Context struct {
 	streamingManager     storetypes.StreamingManager
 	cometInfo            comet.BlockInfo
 	headerInfo           header.Info
+	meter                metrics.Meter
 
 	memStore storetypes.MemStore
 
@@ -80,6 +82,7 @@ type Request = Context
 
 // Read-only accessors
 func (c Context) Context() context.Context                      { return c.baseCtx }
+func (c *Context) ContextPtr() *context.Context                 { return &c.baseCtx }
 func (c Context) MultiStore() storetypes.MultiStore             { return c.ms }
 func (c Context) BlockHeight() int64                            { return c.header.Height }
 func (c Context) BlockTime() time.Time                          { return c.header.Time }
@@ -145,6 +148,7 @@ func NewContext(ms storetypes.MultiStore, header cmtproto.Header, isCheckTx bool
 		checkTx:              isCheckTx,
 		sigverifyTx:          true,
 		logger:               logger,
+		meter:                metrics.NewNilMeter(),
 		gasMeter:             storetypes.NewInfiniteGasMeter(),
 		minGasPrice:          DecCoins{},
 		eventManager:         NewEventManager(),
@@ -357,6 +361,15 @@ func (c Context) Value(key interface{}) interface{} {
 	}
 
 	return c.baseCtx.Value(key)
+}
+
+func (c Context) WithMeter(meter metrics.Meter) Context {
+	c.meter = meter
+	return c
+}
+
+func (c Context) Meter() metrics.Meter {
+	return c.meter
 }
 
 // ----------------------------------------------------------------------------
