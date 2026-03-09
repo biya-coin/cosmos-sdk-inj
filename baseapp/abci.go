@@ -439,7 +439,7 @@ func (app *BaseApp) PrepareProposal(req *abci.PrepareProposalRequest) (resp *abc
 	// metrics and trace
 	heightStr := strconv.Itoa(int(req.Height))
 	sdkCtx := app.prepareProposalState.Context()
-	defer app.meter.FuncTiming(&sdkCtx, "PrepareProposal", metrics.Tag("height", req.Height))(&err)
+	defer app.meter.FuncTiming(&sdkCtx, "PrepareProposal", metrics.TraceTag("height", req.Height))(&err)
 	if app.traceFlightRecorder != nil {
 		defer app.traceFlightRecorder.StartRegion("prepare-proposal", heightStr)()
 	}
@@ -539,7 +539,7 @@ func (app *BaseApp) ProcessProposal(req *abci.ProcessProposalRequest) (resp *abc
 	// metrics and trace
 	heightStr := strconv.Itoa(int(req.Height))
 	sdkCtx := app.processProposalState.Context()
-	defer app.meter.FuncTiming(&sdkCtx, "ProcessProposal", metrics.Tag("height", req.Height))(&err)
+	defer app.meter.FuncTiming(&sdkCtx, "ProcessProposal", metrics.TraceTag("height", req.Height))(&err)
 	if app.traceFlightRecorder != nil {
 		defer app.traceFlightRecorder.StartRegion("process-proposal", heightStr)()
 	}
