@@ -58,3 +58,8 @@ func (h *HandlerMap) GetSignBytes(ctx context.Context, signMode signingv1beta1.S
 
 	return handler.GetSignBytes(ctx, signerData, txData)
 }
+
+func (h *HandlerMap) AddSignModeHandler(mode signingv1beta1.SignMode, handler SignModeHandler) {
+	h.modes = append(h.modes, mode)
+	h.signModeHandlers[mode] = handler
+}
