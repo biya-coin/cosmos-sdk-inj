@@ -710,6 +710,7 @@ func (app *BaseApp) VerifyVoteExtension(req *abci.VerifyVoteExtensionRequest) (r
 // only used to handle early cancellation, for anything related to state app.finalizeBlockState.Context()
 // must be used.
 func (app *BaseApp) internalFinalizeBlock(ctx context.Context, req *abci.FinalizeBlockRequest) (*abci.FinalizeBlockResponse, error) {
+	ifbT0 := time.Now()
 	var events []abci.Event
 
 	if err := app.checkHalt(req.Height, req.Time); err != nil {
@@ -782,6 +783,7 @@ func (app *BaseApp) internalFinalizeBlock(ctx context.Context, req *abci.Finaliz
 			WithHeaderHash(req.Hash))
 	}
 
+	ifbT1 := time.Now()
 	preblockEvents, err := app.preBlock(req)
 	if err != nil {
 		return nil, err
@@ -789,6 +791,7 @@ func (app *BaseApp) internalFinalizeBlock(ctx context.Context, req *abci.Finaliz
 
 	events = append(events, preblockEvents...)
 
+	ifbT2 := time.Now()
 	beginBlock, err := app.beginBlock(req)
 	if err != nil {
 		return nil, err
@@ -814,6 +817,7 @@ func (app *BaseApp) internalFinalizeBlock(ctx context.Context, req *abci.Finaliz
 	//
 	// NOTE: Not all raw transactions may adhere to the sdk.Tx interface, e.g.
 	// vote extensions, so skip those.
+	ifbT3 := time.Now()
 	txResults, err := app.executeTxs(ctx, req.Txs)
 	if err != nil {
 		return nil, err
@@ -823,6 +827,7 @@ func (app *BaseApp) internalFinalizeBlock(ctx context.Context, req *abci.Finaliz
 		app.finalizeBlockState.ms = app.finalizeBlockState.ms.SetTracingContext(nil).(storetypes.CacheMultiStore)
 	}
 
+	ifbT4 := time.Now()
 	endBlock, err := app.endBlock(app.finalizeBlockState.Context())
 	if err != nil {
 		return nil, err
@@ -837,7 +842,21 @@ func (app *BaseApp) internalFinalizeBlock(ctx context.Context, req *abci.Finaliz
 	}
 
 	events = append(events, endBlock.Events...)
+	ifbT5 := time.Now()
 	cp := app.GetConsensusParams(app.finalizeBlockState.Context())
+
+	ifbT6 := time.Now()
+
+	fmt.Printf("msg=app_internal_finalize_block height=%d ifb_total_ms=%.3f ifb1_setup_ms=%.3f ifb2_pre_block_ms=%.3f ifb3_begin_block_ms=%.3f ifb4_execute_txs_ms=%.3f ifb5_end_block_ms=%.3f ifb6_resp_ms=%.3f\n",
+		req.Height,
+		float64(ifbT6.Sub(ifbT0).Nanoseconds())/1e6,
+		float64(ifbT1.Sub(ifbT0).Nanoseconds())/1e6,
+		float64(ifbT2.Sub(ifbT1).Nanoseconds())/1e6,
+		float64(ifbT3.Sub(ifbT2).Nanoseconds())/1e6,
+		float64(ifbT4.Sub(ifbT3).Nanoseconds())/1e6,
+		float64(ifbT5.Sub(ifbT4).Nanoseconds())/1e6,
+		float64(ifbT6.Sub(ifbT5).Nanoseconds())/1e6,
+	)
 
 	return &abci.FinalizeBlockResponse{
 		Events:                events,
@@ -891,6 +910,7 @@ func (app *BaseApp) executeTxs(ctx context.Context, txs [][]byte) ([]*abci.ExecT
 // extensions into the proposal, which should not themselves be executed in cases
 // where they adhere to the sdk.Tx interface.
 func (app *BaseApp) FinalizeBlock(req *abci.FinalizeBlockRequest) (res *abci.FinalizeBlockResponse, err error) {
+	fbT0 := time.Now()
 	defer func() {
 		// call the streaming service hooks with the FinalizeBlock messages
 		for _, streamingListener := range app.streamingManager.ABCIListeners {
@@ -900,16 +920,26 @@ func (app *BaseApp) FinalizeBlock(req *abci.FinalizeBlockRequest) (res *abci.Fin
 		}
 	}()
 
+	var fbT1, fbT2 time.Time
+
 	if app.optimisticExec.Initialized() {
 		// check if the hash we got is the same as the one we are executing
 		aborted := app.optimisticExec.AbortIfNeeded(req.Hash)
 		// Wait for the OE to finish, regardless of whether it was aborted or not
 		res, err = app.optimisticExec.WaitResult()
+		fbT1 = time.Now()
 
 		// only return if we are not aborting
 		if !aborted {
 			if res != nil {
 				res.AppHash = app.workingHash()
+				fbT2 = time.Now()
+				fmt.Printf("msg=app_finalize_block height=%d app_fb_total_ms=%.3f fb1_oe_wait_ms=%.3f fb2_working_hash_ms=%.3f\n",
+					req.Height,
+					float64(fbT2.Sub(fbT0).Nanoseconds())/1e6,
+					float64(fbT1.Sub(fbT0).Nanoseconds())/1e6,
+					float64(fbT2.Sub(fbT1).Nanoseconds())/1e6,
+				)
 			}
 
 			return res, err
@@ -922,8 +952,16 @@ func (app *BaseApp) FinalizeBlock(req *abci.FinalizeBlockRequest) (res *abci.Fin
 
 	// if no OE is running, just run the block (this is either a block replay or a OE that got aborted)
 	res, err = app.internalFinalizeBlock(context.Background(), req)
+	fbT1 = time.Now()
 	if res != nil {
 		res.AppHash = app.workingHash()
+		fbT2 = time.Now()
+		fmt.Printf("msg=app_finalize_block height=%d app_fb_total_ms=%.3f fb1_internal_exec_ms=%.3f fb2_working_hash_ms=%.3f\n",
+			req.Height,
+			float64(fbT2.Sub(fbT0).Nanoseconds())/1e6,
+			float64(fbT1.Sub(fbT0).Nanoseconds())/1e6,
+			float64(fbT2.Sub(fbT1).Nanoseconds())/1e6,
+		)
 	}
 
 	return res, err
