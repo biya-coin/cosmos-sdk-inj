@@ -439,7 +439,11 @@ func (app *BaseApp) PrepareProposal(req *abci.PrepareProposalRequest) (resp *abc
 		}
 	}()
 
+	tPrepareStart := time.Now()
 	resp, err = app.prepareProposal(app.prepareProposalState.Context(), req)
+	prepareHandlerMs := float64(time.Since(tPrepareStart).Nanoseconds()) / 1e6
+	fmt.Printf("msg=sdk_prepare_timing height=%d prepare_handler_ms=%.3f\n", req.Height, prepareHandlerMs)
+
 	if err != nil {
 		app.logger.Error("failed to prepare proposal", "height", req.Height, "time", req.Time, "err", err)
 		return &abci.PrepareProposalResponse{Txs: req.Txs}, nil
@@ -847,9 +851,8 @@ func (app *BaseApp) internalFinalizeBlock(ctx context.Context, req *abci.Finaliz
 
 	ifbT6 := time.Now()
 
-	fmt.Printf("msg=app_internal_finalize_block height=%d ifb_total_ms=%.3f ifb1_setup_ms=%.3f ifb2_pre_block_ms=%.3f ifb3_begin_block_ms=%.3f ifb4_execute_txs_ms=%.3f ifb5_end_block_ms=%.3f ifb6_resp_ms=%.3f\n",
+	fmt.Printf("msg=app_internal_finalize_block height=%d ifb1_setup_ms=%.3f ifb2_pre_block_ms=%.3f ifb3_begin_block_ms=%.3f ifb4_execute_txs_ms=%.3f ifb5_end_block_ms=%.3f ifb6_resp_ms=%.3f\n",
 		req.Height,
-		float64(ifbT6.Sub(ifbT0).Nanoseconds())/1e6,
 		float64(ifbT1.Sub(ifbT0).Nanoseconds())/1e6,
 		float64(ifbT2.Sub(ifbT1).Nanoseconds())/1e6,
 		float64(ifbT3.Sub(ifbT2).Nanoseconds())/1e6,
@@ -956,9 +959,8 @@ func (app *BaseApp) FinalizeBlock(req *abci.FinalizeBlockRequest) (res *abci.Fin
 	if res != nil {
 		res.AppHash = app.workingHash()
 		fbT2 = time.Now()
-		fmt.Printf("msg=app_finalize_block height=%d app_fb_total_ms=%.3f fb1_internal_exec_ms=%.3f fb2_working_hash_ms=%.3f\n",
+		fmt.Printf("msg=app_finalize_block height=%d fb1_internal_exec_ms=%.3f fb2_working_hash_ms=%.3f\n",
 			req.Height,
-			float64(fbT2.Sub(fbT0).Nanoseconds())/1e6,
 			float64(fbT1.Sub(fbT0).Nanoseconds())/1e6,
 			float64(fbT2.Sub(fbT1).Nanoseconds())/1e6,
 		)
