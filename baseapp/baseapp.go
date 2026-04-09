@@ -6,6 +6,7 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"time"
 
 	"github.com/InjectiveLabs/metrics"
 	"github.com/cockroachdb/errors"
@@ -869,6 +870,11 @@ func (app *BaseApp) runTx(mode execMode, txBytes []byte, tx sdk.Tx) (gInfo sdk.G
 	return app.runTxWithMultiStore(mode, txBytes, tx, -1, nil, nil)
 }
 
+// blockTxAnteMs, blockTxMsgsMs, blockTxPostMs are block-scoped accumulators
+// written by runTxWithMultiStore and read by executeTxs after the loop.
+// Safe because tx execution inside FinalizeBlock is sequential.
+var blockTxAnteMs, blockTxMsgsMs, blockTxPostMs float64
+
 func (app *BaseApp) runTxWithMultiStore(
 	mode execMode,
 	txBytes []byte,
@@ -966,7 +972,11 @@ func (app *BaseApp) runTxWithMultiStore(
 		// performance benefits, but it'll be more difficult to get right.
 		anteCtx, msCache = app.cacheTxContext(ctx, txBytes)
 		anteCtx = anteCtx.WithEventManager(sdk.NewEventManager())
+		tAnteStart := time.Now()
 		newCtx, err := app.anteHandler(anteCtx, tx, mode == execModeSimulate)
+		if mode == execModeFinalize {
+			blockTxAnteMs += float64(time.Since(tAnteStart).Nanoseconds()) / 1e6
+		}
 
 		if !newCtx.IsZero() {
 			// At this point, newCtx.MultiStore() is a store branch, or something else
@@ -1020,7 +1030,11 @@ func (app *BaseApp) runTxWithMultiStore(
 	// Result if any single message fails or does not have a registered Handler.
 	msgsV2, err := tx.GetMsgsV2()
 	if err == nil {
+		tMsgsStart := time.Now()
 		result, err = app.runMsgs(runMsgCtx, msgs, msgsV2, mode)
+		if mode == execModeFinalize {
+			blockTxMsgsMs += float64(time.Since(tMsgsStart).Nanoseconds()) / 1e6
+		}
 	}
 
 	// Run optional postHandlers (should run regardless of the execution result).
@@ -1032,7 +1046,11 @@ func (app *BaseApp) runTxWithMultiStore(
 		// Note that the state is still preserved.
 		postCtx := runMsgCtx.WithEventManager(sdk.NewEventManager())
 
+		tPostStart := time.Now()
 		newCtx, errPostHandler := app.postHandler(postCtx, tx, mode == execModeSimulate, err == nil)
+		if mode == execModeFinalize {
+			blockTxPostMs += float64(time.Since(tPostStart).Nanoseconds()) / 1e6
+		}
 		if errPostHandler != nil {
 			return gInfo, nil, anteEvents, errors.Join(err, errPostHandler)
 		}

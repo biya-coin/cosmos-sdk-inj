@@ -714,7 +714,6 @@ func (app *BaseApp) VerifyVoteExtension(req *abci.VerifyVoteExtensionRequest) (r
 // only used to handle early cancellation, for anything related to state app.finalizeBlockState.Context()
 // must be used.
 func (app *BaseApp) internalFinalizeBlock(ctx context.Context, req *abci.FinalizeBlockRequest) (*abci.FinalizeBlockResponse, error) {
-	ifbT0 := time.Now()
 	var events []abci.Event
 
 	if err := app.checkHalt(req.Height, req.Time); err != nil {
@@ -787,7 +786,6 @@ func (app *BaseApp) internalFinalizeBlock(ctx context.Context, req *abci.Finaliz
 			WithHeaderHash(req.Hash))
 	}
 
-	ifbT1 := time.Now()
 	preblockEvents, err := app.preBlock(req)
 	if err != nil {
 		return nil, err
@@ -795,7 +793,7 @@ func (app *BaseApp) internalFinalizeBlock(ctx context.Context, req *abci.Finaliz
 
 	events = append(events, preblockEvents...)
 
-	ifbT2 := time.Now()
+	ifbT0 := time.Now()
 	beginBlock, err := app.beginBlock(req)
 	if err != nil {
 		return nil, err
@@ -821,7 +819,7 @@ func (app *BaseApp) internalFinalizeBlock(ctx context.Context, req *abci.Finaliz
 	//
 	// NOTE: Not all raw transactions may adhere to the sdk.Tx interface, e.g.
 	// vote extensions, so skip those.
-	ifbT3 := time.Now()
+	ifbT1 := time.Now()
 	txResults, err := app.executeTxs(ctx, req.Txs)
 	if err != nil {
 		return nil, err
@@ -831,8 +829,9 @@ func (app *BaseApp) internalFinalizeBlock(ctx context.Context, req *abci.Finaliz
 		app.finalizeBlockState.ms = app.finalizeBlockState.ms.SetTracingContext(nil).(storetypes.CacheMultiStore)
 	}
 
-	ifbT4 := time.Now()
+	ifbT2 := time.Now()
 	endBlock, err := app.endBlock(app.finalizeBlockState.Context())
+	ifbT3 := time.Now()
 	if err != nil {
 		return nil, err
 	}
@@ -846,19 +845,13 @@ func (app *BaseApp) internalFinalizeBlock(ctx context.Context, req *abci.Finaliz
 	}
 
 	events = append(events, endBlock.Events...)
-	ifbT5 := time.Now()
 	cp := app.GetConsensusParams(app.finalizeBlockState.Context())
 
-	ifbT6 := time.Now()
-
-	fmt.Printf("msg=app_internal_finalize_block height=%d ifb1_setup_ms=%.3f ifb2_pre_block_ms=%.3f ifb3_begin_block_ms=%.3f ifb4_execute_txs_ms=%.3f ifb5_end_block_ms=%.3f ifb6_resp_ms=%.3f\n",
+	fmt.Printf("msg=app_internal_finalize_block height=%d ifb1_begin_block_ms=%.3f ifb2_execute_txs_ms=%.3f ifb3_end_block_ms=%.3f\n",
 		req.Height,
 		float64(ifbT1.Sub(ifbT0).Nanoseconds())/1e6,
 		float64(ifbT2.Sub(ifbT1).Nanoseconds())/1e6,
 		float64(ifbT3.Sub(ifbT2).Nanoseconds())/1e6,
-		float64(ifbT4.Sub(ifbT3).Nanoseconds())/1e6,
-		float64(ifbT5.Sub(ifbT4).Nanoseconds())/1e6,
-		float64(ifbT6.Sub(ifbT5).Nanoseconds())/1e6,
 	)
 
 	return &abci.FinalizeBlockResponse{
@@ -871,6 +864,10 @@ func (app *BaseApp) internalFinalizeBlock(ctx context.Context, req *abci.Finaliz
 
 func (app *BaseApp) executeTxs(ctx context.Context, txs [][]byte) ([]*abci.ExecTxResult, error) {
 	txResults := make([]*abci.ExecTxResult, 0, len(txs))
+	// Reset block-scoped sub-step accumulators before processing any tx.
+	blockTxAnteMs = 0
+	blockTxMsgsMs = 0
+	blockTxPostMs = 0
 	for txIdx, rawTx := range txs {
 		var response *abci.ExecTxResult
 
@@ -899,6 +896,9 @@ func (app *BaseApp) executeTxs(ctx context.Context, txs [][]byte) ([]*abci.ExecT
 
 		txResults = append(txResults, response)
 	}
+	height := app.finalizeBlockState.Context().BlockHeight()
+	fmt.Printf("msg=execute_txs_substep height=%d etx1_ante_ms=%.3f etx2_msgs_ms=%.3f etx3_post_ms=%.3f\n",
+		height, blockTxAnteMs, blockTxMsgsMs, blockTxPostMs)
 	return txResults, nil
 }
 
