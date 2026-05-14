@@ -74,10 +74,17 @@ const (
 	FlagPruningInterval     = "pruning-interval"
 	FlagIndexEvents         = "index-events"
 	FlagMinRetainBlocks     = "min-retain-blocks"
-	FlagIAVLCacheSize       = "iavl-cache-size"
-	FlagDisableIAVLFastNode = "iavl-disable-fastnode"
-	FlagIAVLSyncPruning     = "iavl-sync-pruning"
-	FlagShutdownGrace       = "shutdown-grace"
+		FlagIAVLCacheSize       = "iavl-cache-size"
+		FlagDisableIAVLFastNode = "iavl-disable-fastnode"
+		FlagIAVLSyncPruning     = "iavl-sync-pruning"
+		FlagStoreBackend        = "store.backend"
+		FlagSeiDBEnabled        = "seidb.enabled"
+		FlagSeiDBHome           = "seidb.home"
+		FlagSeiDBSCBackend      = "seidb.sc-backend"
+		FlagSeiDBSSBackend      = "seidb.ss-backend"
+		FlagSeiDBKeepRecent     = "seidb.keep-recent"
+		FlagSeiDBAsyncCommit    = "seidb.async-commit"
+		FlagShutdownGrace       = "shutdown-grace"
 
 	// state sync-related flags
 	FlagStateSyncSnapshotInterval   = "state-sync.snapshot-interval"
@@ -1034,11 +1041,18 @@ func addStartNodeFlags(cmd *cobra.Command, opts StartCmdOptions) {
 	cmd.Flags().String(flagGRPCAddress, serverconfig.DefaultGRPCAddress, "the gRPC server address to listen on")
 	cmd.Flags().Bool(flagGRPCWebEnable, true, "Define if the gRPC-Web server should be enabled. (Note: gRPC must also be enabled)")
 	cmd.Flags().Uint64(FlagStateSyncSnapshotInterval, 0, "State sync snapshot interval")
-	cmd.Flags().Uint32(FlagStateSyncSnapshotKeepRecent, 2, "State sync snapshot to keep")
-	cmd.Flags().Bool(FlagDisableIAVLFastNode, false, "Disable fast node for IAVL tree")
-	cmd.Flags().Bool(FlagIAVLSyncPruning, true, "Disable async pruning for IAVL tree")
-	cmd.Flags().Int(FlagMempoolMaxTxs, mempool.DefaultMaxTx, "Sets MaxTx value for the app-side mempool")
-	cmd.Flags().Duration(FlagShutdownGrace, 0*time.Second, "On Shutdown, duration to wait for resource clean up")
+		cmd.Flags().Uint32(FlagStateSyncSnapshotKeepRecent, 2, "State sync snapshot to keep")
+		cmd.Flags().Bool(FlagDisableIAVLFastNode, false, "Disable fast node for IAVL tree")
+		cmd.Flags().Bool(FlagIAVLSyncPruning, true, "Disable async pruning for IAVL tree")
+		cmd.Flags().String(FlagStoreBackend, "iavl", "Storage backend to use (iavl|seidb)")
+		cmd.Flags().Bool(FlagSeiDBEnabled, false, "Enable the SeiDB storage skeleton path")
+		cmd.Flags().String(FlagSeiDBHome, "", "Home directory for SeiDB state")
+		cmd.Flags().String(FlagSeiDBSCBackend, "memiavl", "SeiDB state commitment backend")
+		cmd.Flags().String(FlagSeiDBSSBackend, "pebbledb", "SeiDB state store backend")
+		cmd.Flags().Uint64(FlagSeiDBKeepRecent, 0, "SeiDB keep-recent setting for historical state")
+		cmd.Flags().Bool(FlagSeiDBAsyncCommit, false, "Enable async commit for the SeiDB skeleton path")
+		cmd.Flags().Int(FlagMempoolMaxTxs, mempool.DefaultMaxTx, "Sets MaxTx value for the app-side mempool")
+		cmd.Flags().Duration(FlagShutdownGrace, 0*time.Second, "On Shutdown, duration to wait for resource clean up")
 
 	// support old flags name for backwards compatibility
 	cmd.Flags().SetNormalizeFunc(func(f *pflag.FlagSet, name string) pflag.NormalizedName {

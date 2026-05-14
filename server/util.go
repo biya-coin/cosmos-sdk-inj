@@ -550,6 +550,7 @@ func DefaultBaseappOptions(appOpts types.AppOptions) []func(*baseapp.BaseApp) {
 	}
 
 	return []func(*baseapp.BaseApp){
+		baseapp.SetStoreConfig(GetStoreConfig(appOpts)),
 		baseapp.SetPruning(pruningOpts),
 		baseapp.SetMinGasPrices(cast.ToString(appOpts.Get(FlagMinGasPrices))),
 		baseapp.SetHaltHeight(cast.ToUint64(appOpts.Get(FlagHaltHeight))),
@@ -566,6 +567,27 @@ func DefaultBaseappOptions(appOpts types.AppOptions) []func(*baseapp.BaseApp) {
 		baseapp.SetChainID(chainID),
 		baseapp.SetQueryGasLimit(cast.ToUint64(appOpts.Get(FlagQueryGasLimit))),
 	}
+}
+
+func GetStoreConfig(appOpts types.AppOptions) store.StoreConfig {
+	cfg := store.DefaultStoreConfig()
+
+	if backend := cast.ToString(appOpts.Get(FlagStoreBackend)); backend != "" {
+		cfg.Backend = store.StoreBackendType(backend)
+	}
+
+	cfg.SeiDB.Enabled = cast.ToBool(appOpts.Get(FlagSeiDBEnabled))
+	cfg.SeiDB.Home = cast.ToString(appOpts.Get(FlagSeiDBHome))
+	cfg.SeiDB.StateCommitmentBackend = cast.ToString(appOpts.Get(FlagSeiDBSCBackend))
+	cfg.SeiDB.StateStoreBackend = cast.ToString(appOpts.Get(FlagSeiDBSSBackend))
+	cfg.SeiDB.KeepRecent = cast.ToUint64(appOpts.Get(FlagSeiDBKeepRecent))
+	cfg.SeiDB.AsyncCommit = cast.ToBool(appOpts.Get(FlagSeiDBAsyncCommit))
+
+	if cfg.SeiDB.Enabled {
+		cfg.Backend = store.StoreBackendSeiDB
+	}
+
+	return cfg.Normalize()
 }
 
 func GetSnapshotStore(appOpts types.AppOptions) (*snapshots.Store, error) {

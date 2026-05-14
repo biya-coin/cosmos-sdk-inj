@@ -8,6 +8,7 @@ import (
 	"github.com/InjectiveLabs/metrics"
 	dbm "github.com/cosmos/cosmos-db"
 
+	"cosmossdk.io/store"
 	sdkmetrics "cosmossdk.io/store/metrics"
 	pruningtypes "cosmossdk.io/store/pruning/types"
 	"cosmossdk.io/store/snapshots"
@@ -27,6 +28,17 @@ import (
 func SetIAVLSyncPruning(sync bool) func(app *BaseApp) {
 	return func(bapp *BaseApp) {
 		bapp.cms.SetIAVLSyncPruning(sync)
+	}
+}
+
+func SetStoreConfig(cfg store.StoreConfig) func(*BaseApp) {
+	return func(bapp *BaseApp) {
+		if bapp.sealed {
+			panic("SetStoreConfig() on sealed BaseApp")
+		}
+
+		bapp.storeConfig = cfg.Normalize()
+		bapp.cms = store.NewCommitMultiStoreWithConfig(bapp.db, bapp.logger, sdkmetrics.NewNoOpMetrics(), bapp.storeConfig)
 	}
 }
 
