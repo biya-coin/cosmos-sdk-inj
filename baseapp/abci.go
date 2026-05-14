@@ -714,6 +714,7 @@ func (app *BaseApp) VerifyVoteExtension(req *abci.VerifyVoteExtensionRequest) (r
 // only used to handle early cancellation, for anything related to state app.finalizeBlockState.Context()
 // must be used.
 func (app *BaseApp) internalFinalizeBlock(ctx context.Context, req *abci.FinalizeBlockRequest) (*abci.FinalizeBlockResponse, error) {
+	ifbFuncStart := time.Now()
 	var events []abci.Event
 
 	if err := app.checkHalt(req.Height, req.Time); err != nil {
@@ -847,8 +848,9 @@ func (app *BaseApp) internalFinalizeBlock(ctx context.Context, req *abci.Finaliz
 	events = append(events, endBlock.Events...)
 	cp := app.GetConsensusParams(app.finalizeBlockState.Context())
 
-	fmt.Printf("msg=app_internal_finalize_block height=%d ifb1_begin_block_ms=%.3f ifb2_execute_txs_ms=%.3f ifb3_end_block_ms=%.3f\n",
+	fmt.Printf("msg=app_internal_finalize_block height=%d ifb_total_ms=%.3f ifb1_begin_block_ms=%.3f ifb2_execute_txs_ms=%.3f ifb3_end_block_ms=%.3f\n",
 		req.Height,
+		float64(ifbT3.Sub(ifbFuncStart).Nanoseconds())/1e6,
 		float64(ifbT1.Sub(ifbT0).Nanoseconds())/1e6,
 		float64(ifbT2.Sub(ifbT1).Nanoseconds())/1e6,
 		float64(ifbT3.Sub(ifbT2).Nanoseconds())/1e6,
