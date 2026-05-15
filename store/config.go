@@ -31,7 +31,7 @@ type SeiDBConfig struct {
 	StateCommitmentBackend string
 	StateStoreBackend      string
 	KeepRecent             uint64
-	AsyncCommit            bool
+	HistoricalProofQueryMaxConcurrency uint32
 }
 
 func DefaultStoreConfig() StoreConfig {
@@ -42,7 +42,7 @@ func DefaultStoreConfig() StoreConfig {
 			StateCommitmentBackend: "memiavl",
 			StateStoreBackend:      "pebbledb",
 			KeepRecent:             0,
-			AsyncCommit:            false,
+			HistoricalProofQueryMaxConcurrency: 0,
 		},
 	}
 }

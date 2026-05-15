@@ -578,10 +578,13 @@ func GetStoreConfig(appOpts types.AppOptions) store.StoreConfig {
 
 	cfg.SeiDB.Enabled = cast.ToBool(appOpts.Get(FlagSeiDBEnabled))
 	cfg.SeiDB.Home = cast.ToString(appOpts.Get(FlagSeiDBHome))
+	if cfg.SeiDB.Home == "" {
+		cfg.SeiDB.Home = cast.ToString(appOpts.Get(flags.FlagHome))
+	}
 	cfg.SeiDB.StateCommitmentBackend = cast.ToString(appOpts.Get(FlagSeiDBSCBackend))
 	cfg.SeiDB.StateStoreBackend = cast.ToString(appOpts.Get(FlagSeiDBSSBackend))
 	cfg.SeiDB.KeepRecent = cast.ToUint64(appOpts.Get(FlagSeiDBKeepRecent))
-	cfg.SeiDB.AsyncCommit = cast.ToBool(appOpts.Get(FlagSeiDBAsyncCommit))
+	cfg.SeiDB.HistoricalProofQueryMaxConcurrency = cast.ToUint32(appOpts.Get(FlagSeiDBHistoricalProofMaxConcurrency))
 
 	if cfg.SeiDB.Enabled {
 		cfg.Backend = store.StoreBackendSeiDB

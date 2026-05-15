@@ -83,7 +83,7 @@ const (
 		FlagSeiDBSCBackend      = "seidb.sc-backend"
 		FlagSeiDBSSBackend      = "seidb.ss-backend"
 		FlagSeiDBKeepRecent     = "seidb.keep-recent"
-		FlagSeiDBAsyncCommit    = "seidb.async-commit"
+		FlagSeiDBHistoricalProofMaxConcurrency = "seidb.historical-proof-max-concurrency"
 		FlagShutdownGrace       = "shutdown-grace"
 
 	// state sync-related flags
@@ -1050,7 +1050,7 @@ func addStartNodeFlags(cmd *cobra.Command, opts StartCmdOptions) {
 		cmd.Flags().String(FlagSeiDBSCBackend, "memiavl", "SeiDB state commitment backend")
 		cmd.Flags().String(FlagSeiDBSSBackend, "pebbledb", "SeiDB state store backend")
 		cmd.Flags().Uint64(FlagSeiDBKeepRecent, 0, "SeiDB keep-recent setting for historical state")
-		cmd.Flags().Bool(FlagSeiDBAsyncCommit, false, "Enable async commit for the SeiDB skeleton path")
+		cmd.Flags().Uint32(FlagSeiDBHistoricalProofMaxConcurrency, 0, "Max concurrent historical proof queries for SeiDB (0 disables limit)")
 		cmd.Flags().Int(FlagMempoolMaxTxs, mempool.DefaultMaxTx, "Sets MaxTx value for the app-side mempool")
 		cmd.Flags().Duration(FlagShutdownGrace, 0*time.Second, "On Shutdown, duration to wait for resource clean up")
 
