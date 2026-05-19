@@ -439,11 +439,7 @@ func (app *BaseApp) PrepareProposal(req *abci.PrepareProposalRequest) (resp *abc
 		}
 	}()
 
-	tPrepareStart := time.Now()
 	resp, err = app.prepareProposal(app.prepareProposalState.Context(), req)
-	prepareHandlerMs := float64(time.Since(tPrepareStart).Nanoseconds()) / 1e6
-	fmt.Printf("msg=sdk_prepare_timing height=%d prepare_handler_ms=%.3f\n", req.Height, prepareHandlerMs)
-
 	if err != nil {
 		app.logger.Error("failed to prepare proposal", "height", req.Height, "time", req.Time, "err", err)
 		return &abci.PrepareProposalResponse{Txs: req.Txs}, nil
