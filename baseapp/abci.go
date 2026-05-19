@@ -386,12 +386,15 @@ func (app *BaseApp) CheckTx(req *abci.CheckTxRequest) (*abci.CheckTxResponse, er
 // Ref: https://github.com/cosmos/cosmos-sdk/blob/main/docs/architecture/adr-060-abci-1.0.md
 // Ref: https://github.com/cometbft/cometbft/blob/main/spec/abci/abci%2B%2B_basic_concepts.md
 func (app *BaseApp) PrepareProposal(req *abci.PrepareProposalRequest) (resp *abci.PrepareProposalResponse, err error) {
+	tTotal := time.Now()
+
 	if app.prepareProposal == nil {
 		return nil, errors.New("PrepareProposal handler not set")
 	}
 
 	// Always reset state given that PrepareProposal can timeout and be called
 	// again in a subsequent round.
+	tBuildHeader := time.Now()
 	header := cmtproto.Header{
 		ChainID:            app.chainID,
 		Height:             req.Height,
@@ -400,7 +403,11 @@ func (app *BaseApp) PrepareProposal(req *abci.PrepareProposalRequest) (resp *abc
 		NextValidatorsHash: req.NextValidatorsHash,
 		AppHash:            app.LastCommitID().Hash,
 	}
+	buildHeaderMs := float64(time.Since(tBuildHeader).Nanoseconds()) / 1e6
+
+	tSetState := time.Now()
 	app.setState(execModePrepareProposal, header)
+	setStateMs := float64(time.Since(tSetState).Nanoseconds()) / 1e6
 
 	// CometBFT must never call PrepareProposal with a height of 0.
 	//
@@ -409,6 +416,7 @@ func (app *BaseApp) PrepareProposal(req *abci.PrepareProposalRequest) (resp *abc
 		return nil, errors.New("PrepareProposal called with invalid height")
 	}
 
+	tSetCtx := time.Now()
 	app.prepareProposalState.SetContext(app.getContextForProposal(app.prepareProposalState.Context(), req.Height).
 		WithVoteInfos(toVoteInfo(req.LocalLastCommit.Votes)). // this is a set of votes that are not finalized yet, wait for commit
 		WithBlockHeight(req.Height).
@@ -425,6 +433,7 @@ func (app *BaseApp) PrepareProposal(req *abci.PrepareProposalRequest) (resp *abc
 	app.prepareProposalState.SetContext(app.prepareProposalState.Context().
 		WithConsensusParams(app.GetConsensusParams(app.prepareProposalState.Context())).
 		WithBlockGasMeter(app.getBlockGasMeter(app.prepareProposalState.Context())))
+	setCtxMs := float64(time.Since(tSetCtx).Nanoseconds()) / 1e6
 
 	defer func() {
 		if err := recover(); err != nil {
@@ -439,7 +448,11 @@ func (app *BaseApp) PrepareProposal(req *abci.PrepareProposalRequest) (resp *abc
 		}
 	}()
 
+	tPrepare := time.Now()
 	resp, err = app.prepareProposal(app.prepareProposalState.Context(), req)
+	prepareMs := float64(time.Since(tPrepare).Nanoseconds()) / 1e6
+	totalMs := float64(time.Since(tTotal).Nanoseconds()) / 1e6
+	fmt.Printf("msg=baseapp_prepare_proposal_timing total_ms=%.3f build_header_ms=%.3f set_state_ms=%.3f set_ctx_ms=%.3f prepare_ms=%.3f\n", totalMs, buildHeaderMs, setStateMs, setCtxMs, prepareMs)
 	if err != nil {
 		app.logger.Error("failed to prepare proposal", "height", req.Height, "time", req.Time, "err", err)
 		return &abci.PrepareProposalResponse{Txs: req.Txs}, nil
