@@ -5,7 +5,7 @@ package rootmulti
 import (
 	"testing"
 
-	ciavl "github.com/cosmos/iavl"
+	ciavl "cosmossdk.io/store/seidb/sc/sei-iavl"
 	"github.com/stretchr/testify/require"
 )
 

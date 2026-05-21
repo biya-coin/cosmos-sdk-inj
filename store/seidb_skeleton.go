@@ -20,11 +20,12 @@ func newSeiDBSkeletonStore(db dbm.DB, logger log.Logger, metricGatherer metrics.
 	normalized := cfg.Normalize()
 	return &seiDBSkeletonStore{
 		CommitMultiStore: seidbrootmulti.NewStore(db, logger, metricGatherer, seidbrootmulti.Config{
-			Home:                   normalized.SeiDB.Home,
-			StateCommitmentBackend: normalized.SeiDB.StateCommitmentBackend,
-			StateStoreBackend:      normalized.SeiDB.StateStoreBackend,
-			KeepRecent:             normalized.SeiDB.KeepRecent,
+			Home:                               normalized.SeiDB.Home,
+			StateCommitmentBackend:             normalized.SeiDB.StateCommitmentBackend,
+			StateStoreBackend:                  normalized.SeiDB.StateStoreBackend,
+			KeepRecent:                         normalized.SeiDB.KeepRecent,
 			HistoricalProofQueryMaxConcurrency: normalized.SeiDB.HistoricalProofQueryMaxConcurrency,
+			MemIAVL:                            normalized.SeiDB.MemIAVL,
 		}),
 		config: normalized,
 	}

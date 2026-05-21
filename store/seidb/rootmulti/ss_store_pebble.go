@@ -40,7 +40,8 @@ func newPebbleStateStore(cfg Config) (StateStore, error) {
 		return nil, fmt.Errorf("failed to create seidb data dir: %w", err)
 	}
 
-	ssDB, err := dbm.NewDB("seidb-state-store", dbm.PebbleDBBackend, dataDir)
+	// cosmos-db in this module may be built without pebbledb; goleveldb is sufficient for SS.
+	ssDB, err := dbm.NewDB("seidb-state-store", dbm.GoLevelDBBackend, dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open pebbledb state store: %w", err)
 	}
@@ -113,12 +114,12 @@ func (s *pebbleStateStore) ApplyChangeSets(version int64, changeSets []*NamedCha
 			if pair == nil {
 				continue
 			}
-			key := string(pair.GetKey())
+			key := string(pair.Key)
 			if pair.Delete {
 				delete(storeState, key)
 				continue
 			}
-			storeState[key] = cloneBytesNonNil(pair.GetValue())
+			storeState[key] = cloneBytesNonNil(pair.Value)
 		}
 	}
 

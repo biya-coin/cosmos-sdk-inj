@@ -10,7 +10,7 @@ import (
 
 func TestStoreTracksChangeSet(t *testing.T) {
 	base := mem.NewStore()
-	store := NewStore(types.NewKVStoreKey("test"), base)
+	store := LegacyNewStore(types.NewKVStoreKey("test"), base)
 
 	store.Set([]byte("a"), []byte("1"))
 	store.Set([]byte("b"), []byte("2"))

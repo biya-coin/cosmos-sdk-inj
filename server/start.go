@@ -1051,6 +1051,7 @@ func addStartNodeFlags(cmd *cobra.Command, opts StartCmdOptions) {
 		cmd.Flags().String(FlagSeiDBSSBackend, "pebbledb", "SeiDB state store backend")
 		cmd.Flags().Uint64(FlagSeiDBKeepRecent, 0, "SeiDB keep-recent setting for historical state")
 		cmd.Flags().Uint32(FlagSeiDBHistoricalProofMaxConcurrency, 0, "Max concurrent historical proof queries for SeiDB (0 disables limit)")
+		AddMemIAVLFlags(cmd.Flags())
 		cmd.Flags().Int(FlagMempoolMaxTxs, mempool.DefaultMaxTx, "Sets MaxTx value for the app-side mempool")
 		cmd.Flags().Duration(FlagShutdownGrace, 0*time.Second, "On Shutdown, duration to wait for resource clean up")
 

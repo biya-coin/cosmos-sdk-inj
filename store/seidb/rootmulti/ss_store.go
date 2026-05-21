@@ -33,12 +33,12 @@ type snapshotImporter interface {
 	ImportSnapshot(version int64, nodes <-chan SnapshotImportNode) error
 }
 
-type ssStoreBuilder func(db dbm.DB, cfg Config, sc SCCommitter) (StateStore, error)
+type ssStoreBuilder func(db dbm.DB, cfg Config, scStore SCStore) (StateStore, error)
 
 var (
 	ssBuilderMu sync.RWMutex
 	ssBuilders  = map[string]ssStoreBuilder{
-		"pebbledb": func(_ dbm.DB, cfg Config, sc SCCommitter) (StateStore, error) {
+		"pebbledb": func(_ dbm.DB, cfg Config, _ SCStore) (StateStore, error) {
 			return newPebbleStateStore(cfg)
 		},
 	}
@@ -58,7 +58,7 @@ func RegisterStateStoreBuilder(backend string, builder ssStoreBuilder) error {
 	return nil
 }
 
-func newStateStoreFromConfig(db dbm.DB, cfg Config, sc SCCommitter) StateStore {
+func newStateStoreFromConfig(db dbm.DB, cfg Config, scStore SCStore) StateStore {
 	backend := cfg.StateStoreBackend
 	if backend == "" {
 		return noopStateStore{}
@@ -71,7 +71,7 @@ func newStateStoreFromConfig(db dbm.DB, cfg Config, sc SCCommitter) StateStore {
 		panic(fmt.Errorf("unknown seidb state store backend %q", backend))
 	}
 
-	store, err := builder(db, cfg, sc)
+	store, err := builder(db, cfg, scStore)
 	if err != nil {
 		panic(fmt.Errorf("failed to initialize seidb state store backend %q: %w", backend, err))
 	}
@@ -108,25 +108,25 @@ type scBackedStateStore struct {
 	}
 }
 
-func newSCBackedStateStore(sc SCCommitter) StateStore {
+func newSCBackedStateStore(scStore SCStore) StateStore {
 	adapter := &scBackedStateStore{}
-	if s, ok := sc.(interface {
+	if s, ok := scStore.(interface {
 		Snapshot(storeName string, version int64) (map[string][]byte, bool)
 	}); ok {
 		adapter.snapshot = s
 	}
-	if v, ok := sc.(interface {
+	if v, ok := scStore.(interface {
 		HasVersion(version int64) bool
 		EarliestVersion() int64
 	}); ok {
 		adapter.versioned = v
 	}
-	if r, ok := sc.(interface {
+	if r, ok := scStore.(interface {
 		RollbackToVersion(target int64) error
 	}); ok {
 		adapter.rollbacker = r
 	}
-	if s, ok := sc.(interface {
+	if s, ok := scStore.(interface {
 		SyncFromStores(stores map[types.StoreKey]types.CommitKVStore, version int64) error
 	}); ok {
 		adapter.syncer = s

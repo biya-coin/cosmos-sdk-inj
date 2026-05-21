@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cosmos/iavl"
+	iavl "cosmossdk.io/store/seidb/sc/sei-iavl"
 	dbm "github.com/cosmos/cosmos-db"
 
 	"cosmossdk.io/store/cachemulti"
@@ -18,6 +18,8 @@ import (
 	"cosmossdk.io/store/metrics"
 	pruningtypes "cosmossdk.io/store/pruning/types"
 	"cosmossdk.io/store/seidb/commitment"
+	"cosmossdk.io/store/seidb/sc/memiavl"
+	sctypes "cosmossdk.io/store/seidb/sc/types"
 	"cosmossdk.io/store/seidb/state"
 	snapshottypes "cosmossdk.io/store/snapshots/types"
 	"cosmossdk.io/store/types"
@@ -26,14 +28,15 @@ import (
 
 // Config carries SeiDB runtime knobs from app/store config.
 //
-// Phase A keeps behavior compatible by delegating to legacy rootmulti while
-// preserving a stable constructor and config surface for the Seidb path.
+// Phase B (memiavl enabled): AppHash / WorkingHash / CommitID come from SC (memiavl).
+// Phase A (legacy): delegates hash and commit metadata to runtime rootmulti + cosmos/iavl.
 type Config struct {
-	Home                    string
-	StateCommitmentBackend string
-	StateStoreBackend      string
-	KeepRecent             uint64
+	Home                               string
+	StateCommitmentBackend             string
+	StateStoreBackend                  string
+	KeepRecent                         uint64
 	HistoricalProofQueryMaxConcurrency uint32
+	MemIAVL                            memiavl.Config
 }
 
 type NamedChangeSet struct {
@@ -41,26 +44,13 @@ type NamedChangeSet struct {
 	ChangeSet *iavl.ChangeSet
 }
 
-// SCCommitter is the minimal state-commitment interface used in Phase A.
-// A no-op implementation is wired by default so the path is executable while
-// the full SeiDB committer integration is implemented.
-type SCCommitter interface {
-	ApplyChangeSets([]*NamedChangeSet) error
-	Commit(version int64) error
-}
-
-type noopSCCommitter struct{}
-
-func (noopSCCommitter) ApplyChangeSets(_ []*NamedChangeSet) error { return nil }
-func (noopSCCommitter) Commit(_ int64) error                      { return nil }
-
 type Store struct {
 	runtime runtimeBackend
 
 	db     dbm.DB
 	config Config
-	sc     SCCommitter
-	ss     StateStore
+	scStore SCStore
+	ss      StateStore
 	logger log.Logger
 	metrics metrics.StoreMetrics
 
@@ -68,6 +58,7 @@ type Store struct {
 	storesParams map[types.StoreKey]storeParams
 	storeKeys    map[string]types.StoreKey
 	ckvStore map[types.StoreKey]types.CommitKVStore
+	lastCommitInfo *types.CommitInfo
 	historicalProofQueryGate chan struct{}
 	scOpMtx  sync.Mutex
 }
@@ -81,6 +72,10 @@ type runtimeBackend interface {
 	types.CommitMultiStore
 	types.Queryable
 	GetCommitInfo(ver int64) (*types.CommitInfo, error)
+	// SyncCommitMetadata advances runtime DB metadata without committing legacy IAVL trees.
+	SyncCommitMetadata(version int64, info *types.CommitInfo)
+	// LoadVersionForSCBackedCommit loads multistore metadata while keeping legacy IAVL trees at v0.
+	LoadVersionForSCBackedCommit(version int64) error
 }
 
 type historicalSnapshotReader interface {
@@ -103,8 +98,8 @@ func NewStore(db dbm.DB, logger log.Logger, metricGatherer metrics.StoreMetrics,
 		storeKeys:    make(map[string]types.StoreKey),
 		ckvStore:     make(map[types.StoreKey]types.CommitKVStore),
 	}
-	store.sc = newSCCommitterFromConfig(db, cfg)
-	store.ss = newStateStoreFromConfig(db, cfg, store.sc)
+	store.scStore = newSCStoreFromConfig(db, cfg)
+	store.ss = newStateStoreFromConfig(db, cfg, store.scStore)
 	if cfg.HistoricalProofQueryMaxConcurrency > 0 {
 		store.historicalProofQueryGate = make(chan struct{}, int(cfg.HistoricalProofQueryMaxConcurrency))
 	}
@@ -115,11 +110,39 @@ func (s *Store) Config() Config {
 	return s.config
 }
 
+func (s *Store) scBackendIsMemIAVL() bool {
+	backend := s.config.StateCommitmentBackend
+	if backend == "" {
+		backend = "memiavl"
+	}
+	return backend == "memiavl"
+}
+
 func (s *Store) LastCommitID() types.CommitID {
+	if s.usesMemIAVLTreeLayer() {
+		s.mtx.RLock()
+		defer s.mtx.RUnlock()
+		if s.lastCommitInfo == nil {
+			return types.CommitID{}
+		}
+		return s.lastCommitInfo.CommitID()
+	}
 	return s.runtime.LastCommitID()
 }
 
 func (s *Store) WorkingHash() []byte {
+	if s.usesMemIAVLTreeLayer() {
+		if err := s.flushPendingToSC(); err != nil {
+			panic(fmt.Errorf("flush pending changesets to sc: %w", err))
+		}
+		s.mtx.RLock()
+		defer s.mtx.RUnlock()
+		if src, ok := s.scStore.(*memIAVLStore); ok {
+			ci := amendCommitInfo(convertCommitInfo(src.WorkingCommitInfo()), s.storesParams)
+			return ci.Hash()
+		}
+		return nil
+	}
 	return s.runtime.WorkingHash()
 }
 
@@ -144,7 +167,7 @@ func (s *Store) CacheWrapWithTrace(w io.Writer, tc types.TraceContext) types.Cac
 }
 
 func (s *Store) LatestVersion() int64 {
-	return s.runtime.LatestVersion()
+	return s.latestCommittedVersion()
 }
 
 func (s *Store) SetInterBlockCache(cache types.MultiStorePersistentCache) {
@@ -212,52 +235,76 @@ func (s *Store) SetSnapshotInterval(snapshotInterval uint64) {
 	s.runtime.SetSnapshotInterval(snapshotInterval)
 }
 
-// SetSCCommitter allows replacing the default no-op committer.
-func (s *Store) SetSCCommitter(committer SCCommitter) {
-	if committer == nil {
-		committer = noopSCCommitter{}
+// SetSCStore allows replacing the default SC store (for tests or custom backends).
+func (s *Store) SetSCStore(scStore SCStore) {
+	if scStore == nil {
+		scStore = noopSCStore{}
 	}
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
 	if s.ss != nil {
 		_ = s.ss.Close()
 	}
-	s.sc = committer
-	s.ss = newStateStoreFromConfig(s.db, s.config, s.sc)
+	s.scStore = scStore
+	s.ss = newStateStoreFromConfig(s.db, s.config, s.scStore)
+}
+
+func (s *Store) loadRuntimeVersion(ver int64, upgrades *types.StoreUpgrades) error {
+	if s.scBackendIsMemIAVL() {
+		return s.runtime.LoadVersionForSCBackedCommit(ver)
+	}
+	if upgrades != nil {
+		if ver == 0 {
+			return s.runtime.LoadLatestVersionAndUpgrade(upgrades)
+		}
+		return s.runtime.LoadVersionAndUpgrade(ver, upgrades)
+	}
+	if ver == 0 {
+		return s.runtime.LoadLatestVersion()
+	}
+	return s.runtime.LoadVersion(ver)
 }
 
 func (s *Store) LoadLatestVersion() error {
-	if err := s.runtime.LoadLatestVersion(); err != nil {
+	if err := s.loadRuntimeVersion(0, nil); err != nil {
 		return err
 	}
-	s.rebuildCommitStores()
-	return s.syncBackendsWithRuntimeVersion()
+	if err := s.loadSCVersion(0); err != nil {
+		return err
+	}
+	return s.finishLoad()
 }
 
 func (s *Store) LoadLatestVersionAndUpgrade(upgrades *types.StoreUpgrades) error {
-	if err := s.runtime.LoadLatestVersionAndUpgrade(upgrades); err != nil {
+	if err := s.loadRuntimeVersion(0, upgrades); err != nil {
 		return err
 	}
 	s.applyStoreUpgrades(upgrades)
-	s.rebuildCommitStores()
-	return s.syncBackendsWithRuntimeVersion()
+	if err := s.loadSCVersion(0); err != nil {
+		return err
+	}
+	return s.finishLoad()
 }
 
 func (s *Store) LoadVersion(ver int64) error {
-	if err := s.runtime.LoadVersion(ver); err != nil {
+	if err := s.loadRuntimeVersion(ver, nil); err != nil {
 		return err
 	}
-	s.rebuildCommitStores()
-	return s.syncBackendsWithRuntimeVersion()
+	if err := s.loadSCVersion(ver); err != nil {
+		return err
+	}
+	return s.finishLoad()
 }
 
 func (s *Store) LoadVersionAndUpgrade(ver int64, upgrades *types.StoreUpgrades) error {
-	if err := s.runtime.LoadVersionAndUpgrade(ver, upgrades); err != nil {
+	if err := s.loadRuntimeVersion(ver, upgrades); err != nil {
 		return err
 	}
 	s.applyStoreUpgrades(upgrades)
-	s.rebuildCommitStores()
-	return s.syncBackendsWithRuntimeVersion()
+	if err := s.loadSCVersion(ver); err != nil {
+		return err
+	}
+	return s.finishLoad()
 }
 
 func (s *Store) MountStoreWithDB(key types.StoreKey, typ types.StoreType, db dbm.DB) {
@@ -303,11 +350,29 @@ func (s *Store) GetCommitKVStore(key types.StoreKey) types.CommitKVStore {
 	if ok {
 		return store
 	}
-	legacy := s.runtime.GetCommitKVStore(key)
-	if legacy == nil {
-		return nil
+	// When memIAVL SC is active, IAVL modules must read via mmap+MemNode tree, not runtime IAVL.
+	if s.usesMemIAVLTreeLayer() {
+		if params, found := s.getStoreParams(key); found && params.typ == types.StoreTypeIAVL {
+			return nil
+		}
 	}
-	return legacy
+	return s.runtime.GetCommitKVStore(key)
+}
+
+// usesMemIAVLTreeLayer reports whether live IAVL reads go through memiavl.Tree (not runtime iavl).
+func (s *Store) usesMemIAVLTreeLayer() bool {
+	if !s.scBackendIsMemIAVL() {
+		return false
+	}
+	_, ok := s.scStore.(*memIAVLStore)
+	return ok
+}
+
+func (s *Store) getStoreParams(key types.StoreKey) (storeParams, bool) {
+	s.mtx.RLock()
+	defer s.mtx.RUnlock()
+	params, ok := s.storesParams[key]
+	return params, ok
 }
 
 func (s *Store) CacheMultiStore() types.CacheMultiStore {
@@ -319,7 +384,7 @@ func (s *Store) CacheMultiStore() types.CacheMultiStore {
 }
 
 func (s *Store) CacheMultiStoreWithVersion(version int64) (types.CacheMultiStore, error) {
-	latest := s.runtime.LastCommitID().Version
+	latest := s.latestCommittedVersion()
 	if version <= 0 || version == latest {
 		return s.CacheMultiStore(), nil
 	}
@@ -341,13 +406,13 @@ func (s *Store) Query(req *types.RequestQuery) (*types.ResponseQuery, error) {
 		return &types.ResponseQuery{}, err
 	}
 
-	latest := s.runtime.LastCommitID().Version
+	latest := s.latestCommittedVersion()
 	queryVersion := req.Height
 	if queryVersion <= 0 || queryVersion > latest {
 		queryVersion = latest
 	}
 	needProof := req.Prove && requireProof(subpath)
-	if needProof && queryVersion < latest {
+	if needProof && queryVersion < latest && !s.usesMemIAVLTreeLayer() {
 		start := time.Now()
 		defer s.metrics.MeasureSinceFrom(start, "store", "seidb", "historical_proof_query")
 		if !s.tryAcquireHistoricalProofSlot() {
@@ -414,7 +479,7 @@ func (s *Store) Query(req *types.RequestQuery) (*types.ResponseQuery, error) {
 		return &types.ResponseQuery{}, fmt.Errorf("proof is unexpectedly empty; ensure height has not been pruned")
 	}
 
-	commitInfo, err := s.runtime.GetCommitInfo(res.Height)
+	commitInfo, err := s.commitInfoForProof(res.Height)
 	if err != nil {
 		return &types.ResponseQuery{}, err
 	}
@@ -456,7 +521,7 @@ func (s *Store) resolveHistoricalSnapshotReader(version int64) historicalSnapsho
 
 func (s *Store) Commit() types.CommitID {
 	changeSets := cloneNamedChangeSets(s.collectPendingChangeSets())
-	targetVersion := s.runtime.LastCommitID().Version + 1
+	targetVersion := s.nextCommitVersion()
 
 	// Follow storev2-style flush ordering: apply SS/SC changes before runtime commit.
 	if s.ss != nil {
@@ -470,21 +535,35 @@ func (s *Store) Commit() types.CommitID {
 	}
 
 	s.scOpMtx.Lock()
-	if err := s.sc.ApplyChangeSets(changeSets); err != nil {
+	if err := s.scStore.ApplyChangeSets(changeSets); err != nil {
 		s.scOpMtx.Unlock()
 		panic(fmt.Errorf("seidb sc apply changesets failed at version %d: %w", targetVersion, err))
 	}
-	if err := s.sc.Commit(targetVersion); err != nil {
+	if err := s.scStore.Commit(targetVersion); err != nil {
 		s.scOpMtx.Unlock()
 		panic(fmt.Errorf("seidb sc commit failed at version %d: %w", targetVersion, err))
 	}
+	s.rebuildCommitStores()
 	s.scOpMtx.Unlock()
+
+	s.clearPendingChangeSets()
+
+	if s.usesMemIAVLTreeLayer() {
+		s.commitNonIAVLStores()
+		if err := s.refreshLastCommitInfoFromSC(); err != nil {
+			panic(err)
+		}
+		s.runtime.SyncCommitMetadata(targetVersion, s.lastCommitInfo)
+		if err := s.checkBackendsConsistency(targetVersion, true); err != nil {
+			panic(fmt.Errorf("seidb post-commit consistency check failed at version %d: %w", targetVersion, err))
+		}
+		return s.lastCommitInfo.CommitID()
+	}
 
 	cid := s.runtime.Commit()
 	if cid.Version != targetVersion {
 		panic(fmt.Errorf("runtime commit version mismatch: expected %d got %d", targetVersion, cid.Version))
 	}
-	s.clearPendingChangeSets()
 	if err := s.checkBackendsConsistency(cid.Version, true); err != nil {
 		panic(fmt.Errorf("seidb post-commit consistency check failed at version %d: %w", cid.Version, err))
 	}
@@ -496,32 +575,52 @@ func (s *Store) RollbackToVersion(target int64) error {
 		return fmt.Errorf("invalid rollback height target: %d", target)
 	}
 
-	if err := s.runtime.RollbackToVersion(target); err != nil {
-		return err
-	}
-
-	s.rebuildCommitStores()
-
 	var consistencyErrs []error
-	if rollbacker, ok := s.sc.(interface {
-		RollbackToVersion(target int64) error
-	}); ok {
-		s.scOpMtx.Lock()
-		if err := rollbacker.RollbackToVersion(target); err != nil {
-			consistencyErrs = append(consistencyErrs, fmt.Errorf("sc rollback to version %d failed: %w", target, err))
+	if s.scBackendIsMemIAVL() {
+		if rollbacker, ok := s.scStore.(interface {
+			RollbackToVersion(target int64) error
+		}); ok {
+			s.scOpMtx.Lock()
+			if err := rollbacker.RollbackToVersion(target); err != nil {
+				consistencyErrs = append(consistencyErrs, fmt.Errorf("sc rollback to version %d failed: %w", target, err))
+			}
+			s.scOpMtx.Unlock()
 		}
-		s.scOpMtx.Unlock()
-	}
-	if s.ss != nil {
-		if err := s.ss.RollbackToVersion(target); err != nil {
-			consistencyErrs = append(consistencyErrs, fmt.Errorf("ss rollback to version %d failed: %w", target, err))
+		if s.ss != nil {
+			if err := s.ss.RollbackToVersion(target); err != nil {
+				consistencyErrs = append(consistencyErrs, fmt.Errorf("ss rollback to version %d failed: %w", target, err))
+			}
+		}
+		if err := s.runtime.LoadVersionForSCBackedCommit(target); err != nil {
+			consistencyErrs = append(consistencyErrs, err)
+		}
+		s.rebuildCommitStores()
+		_ = s.refreshLastCommitInfoFromSC()
+	} else {
+		if err := s.runtime.RollbackToVersion(target); err != nil {
+			return err
+		}
+		s.rebuildCommitStores()
+		if rollbacker, ok := s.scStore.(interface {
+			RollbackToVersion(target int64) error
+		}); ok {
+			s.scOpMtx.Lock()
+			if err := rollbacker.RollbackToVersion(target); err != nil {
+				consistencyErrs = append(consistencyErrs, fmt.Errorf("sc rollback to version %d failed: %w", target, err))
+			}
+			s.scOpMtx.Unlock()
+		}
+		if s.ss != nil {
+			if err := s.ss.RollbackToVersion(target); err != nil {
+				consistencyErrs = append(consistencyErrs, fmt.Errorf("ss rollback to version %d failed: %w", target, err))
+			}
 		}
 	}
 
-	if err := s.checkBackendsConsistency(s.runtime.LastCommitID().Version, true); err != nil {
+	checkVersion := s.latestCommittedVersion()
+	if err := s.checkBackendsConsistency(checkVersion, true); err != nil {
 		consistencyErrs = append(consistencyErrs, err)
 	}
-
 	if len(consistencyErrs) > 0 {
 		return errors.Join(consistencyErrs...)
 	}
@@ -586,9 +685,12 @@ func (s *Store) Restore(height uint64, format uint32, protoReader protoio.Reader
 	}
 	s.rebuildCommitStores()
 
-	version := s.runtime.LastCommitID().Version
+	version := s.latestCommittedVersion()
 	if version <= 0 {
 		version = int64(height)
+	}
+	if s.scBackendIsMemIAVL() {
+		_ = s.refreshLastCommitInfoFromSC()
 	}
 	if err := s.checkBackendsConsistency(version, !ssImported); err != nil {
 		return snapshottypes.SnapshotItem{}, err
@@ -597,9 +699,30 @@ func (s *Store) Restore(height uint64, format uint32, protoReader protoio.Reader
 }
 
 func (s *Store) syncBackendsWithRuntimeVersion() error {
+	if s.scBackendIsMemIAVL() {
+		return nil
+	}
 	version := s.runtime.LastCommitID().Version
 	if version <= 0 {
 		return nil
+	}
+	if syncer, ok := s.scStore.(interface {
+		CurrentVersion() int64
+		SyncFromStores(stores map[types.StoreKey]types.CommitKVStore, version int64) error
+	}); ok && syncer.CurrentVersion() < version {
+		stores := make(map[types.StoreKey]types.CommitKVStore)
+		for _, key := range s.sortedStoreKeys() {
+			if store := s.runtime.GetCommitKVStore(key); store != nil && store.GetStoreType() == types.StoreTypeIAVL {
+				stores[key] = store
+			}
+		}
+		s.scOpMtx.Lock()
+		err := syncer.SyncFromStores(stores, version)
+		s.scOpMtx.Unlock()
+		if err != nil {
+			return fmt.Errorf("sync memiavl from runtime at version %d: %w", version, err)
+		}
+		s.rebuildCommitStores()
 	}
 	return s.checkBackendsConsistency(version, true)
 }
@@ -607,7 +730,7 @@ func (s *Store) syncBackendsWithRuntimeVersion() error {
 func (s *Store) checkBackendsConsistency(version int64, checkSS bool) error {
 	var consistencyErrs []error
 
-	if checker, ok := s.sc.(interface {
+	if checker, ok := s.scStore.(interface {
 		HasVersion(version int64) bool
 	}); ok {
 		s.scOpMtx.Lock()
@@ -616,7 +739,7 @@ func (s *Store) checkBackendsConsistency(version int64, checkSS bool) error {
 		}
 		s.scOpMtx.Unlock()
 	}
-	if checker, ok := s.sc.(interface {
+	if checker, ok := s.scStore.(interface {
 		CurrentVersion() int64
 	}); ok {
 		s.scOpMtx.Lock()
@@ -640,6 +763,15 @@ func (s *Store) rebuildCommitStores() {
 	keys := s.sortedStoreKeys()
 
 	newStores := make(map[types.StoreKey]types.CommitKVStore, len(keys))
+	var treeProvider interface {
+		GetCommitKVStore(name string) sctypes.CommitKVStore
+	}
+	if provider, ok := s.scStore.(interface {
+		GetCommitKVStore(name string) sctypes.CommitKVStore
+	}); ok {
+		treeProvider = provider
+	}
+
 	for _, key := range keys {
 		commitStore := s.runtime.GetCommitStore(key)
 		if commitStore == nil {
@@ -647,11 +779,20 @@ func (s *Store) rebuildCommitStores() {
 		}
 		legacyStore, ok := commitStore.(types.CommitKVStore)
 		if !ok {
-			// Transient/Memory/Object stores are not CommitKVStore.
 			continue
 		}
 		if legacyStore.GetStoreType() == types.StoreTypeIAVL {
-			newStores[key] = commitment.NewStore(key, legacyStore)
+			if treeProvider != nil {
+				if tree := treeProvider.GetCommitKVStore(key.Name()); tree != nil {
+					newStores[key] = commitment.NewStore(tree)
+					continue
+				}
+			}
+			if s.usesMemIAVLTreeLayer() {
+				// SC not ready for this module yet (e.g. before Initialize); skip until Load completes.
+				continue
+			}
+			newStores[key] = commitment.LegacyNewStore(key, legacyStore)
 			continue
 		}
 		newStores[key] = legacyStore
@@ -660,6 +801,31 @@ func (s *Store) rebuildCommitStores() {
 	s.mtx.Lock()
 	s.ckvStore = newStores
 	s.mtx.Unlock()
+}
+
+func (s *Store) loadSCVersion(version int64) error {
+	loader, ok := s.scStore.(interface {
+		LoadVersion(targetVersion int64, storeNames []string) error
+	})
+	if !ok {
+		return nil
+	}
+	s.scOpMtx.Lock()
+	defer s.scOpMtx.Unlock()
+	return loader.LoadVersion(version, s.iavlStoreNames())
+}
+
+func (s *Store) iavlStoreNames() []string {
+	keys := s.sortedStoreKeys()
+	names := make([]string, 0, len(keys))
+	for _, key := range keys {
+		params, ok := s.storesParams[key]
+		if !ok || params.typ != types.StoreTypeIAVL {
+			continue
+		}
+		names = append(names, key.Name())
+	}
+	return names
 }
 
 func (s *Store) buildCacheStores(version int64, historical bool, readers ...interface {
@@ -814,6 +980,95 @@ func (s *Store) clearPendingChangeSets() {
 		}
 		csStore.ClearChangeSet()
 	}
+}
+
+func (s *Store) finishLoad() error {
+	s.rebuildCommitStores()
+	if err := s.refreshLastCommitInfoFromSC(); err != nil {
+		return err
+	}
+	if s.scBackendIsMemIAVL() {
+		version := s.latestCommittedVersion()
+		if version > 0 {
+			return s.checkBackendsConsistency(version, true)
+		}
+		return nil
+	}
+	return s.syncBackendsWithRuntimeVersion()
+}
+
+func (s *Store) refreshLastCommitInfoFromSC() error {
+	src, ok := s.scStore.(*memIAVLStore)
+	if !ok {
+		return nil
+	}
+	ci := convertCommitInfo(src.LastCommitInfo())
+	s.mtx.Lock()
+	s.lastCommitInfo = amendCommitInfo(ci, s.storesParams)
+	s.mtx.Unlock()
+	return nil
+}
+
+func (s *Store) latestCommittedVersion() int64 {
+	if s.usesMemIAVLTreeLayer() {
+		s.mtx.RLock()
+		defer s.mtx.RUnlock()
+		if s.lastCommitInfo != nil {
+			return s.lastCommitInfo.Version
+		}
+		return 0
+	}
+	return s.runtime.LastCommitID().Version
+}
+
+func (s *Store) nextCommitVersion() int64 {
+	if s.usesMemIAVLTreeLayer() {
+		s.mtx.RLock()
+		defer s.mtx.RUnlock()
+		if s.lastCommitInfo != nil {
+			return s.lastCommitInfo.Version + 1
+		}
+		return 1
+	}
+	return s.runtime.LastCommitID().Version + 1
+}
+
+func (s *Store) flushPendingToSC() error {
+	changeSets := cloneNamedChangeSets(s.collectPendingChangeSets())
+	if len(changeSets) == 0 {
+		return nil
+	}
+	s.scOpMtx.Lock()
+	defer s.scOpMtx.Unlock()
+	return s.scStore.ApplyChangeSets(changeSets)
+}
+
+func (s *Store) commitNonIAVLStores() {
+	s.mtx.RLock()
+	defer s.mtx.RUnlock()
+	for key, store := range s.ckvStore {
+		params, ok := s.storesParams[key]
+		if !ok || params.typ == types.StoreTypeIAVL {
+			continue
+		}
+		_ = store.Commit()
+	}
+}
+
+func (s *Store) commitInfoForProof(height int64) (*types.CommitInfo, error) {
+	if s.usesMemIAVLTreeLayer() {
+		s.mtx.RLock()
+		defer s.mtx.RUnlock()
+		if s.lastCommitInfo != nil && s.lastCommitInfo.Version == height {
+			return s.lastCommitInfo, nil
+		}
+		latest := int64(0)
+		if s.lastCommitInfo != nil {
+			latest = s.lastCommitInfo.Version
+		}
+		return nil, fmt.Errorf("commit info for height %d unavailable (sc latest=%d)", height, latest)
+	}
+	return s.runtime.GetCommitInfo(height)
 }
 
 func cloneNamedChangeSets(in []*NamedChangeSet) []*NamedChangeSet {

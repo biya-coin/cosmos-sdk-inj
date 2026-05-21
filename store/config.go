@@ -5,6 +5,7 @@ import (
 
 	"cosmossdk.io/log"
 	"cosmossdk.io/store/metrics"
+	"cosmossdk.io/store/seidb/sc/memiavl"
 	"cosmossdk.io/store/types"
 )
 
@@ -26,23 +27,25 @@ type StoreConfig struct {
 type StoreBackendType string
 
 type SeiDBConfig struct {
-	Enabled                bool
-	Home                    string
-	StateCommitmentBackend string
-	StateStoreBackend      string
-	KeepRecent             uint64
+	Enabled                            bool
+	Home                               string
+	StateCommitmentBackend             string
+	StateStoreBackend                  string
+	KeepRecent                         uint64
 	HistoricalProofQueryMaxConcurrency uint32
+	MemIAVL                            memiavl.Config
 }
 
 func DefaultStoreConfig() StoreConfig {
 	return StoreConfig{
 		Backend: StoreBackendIAVL,
 		SeiDB: SeiDBConfig{
-			Enabled:                false,
-			StateCommitmentBackend: "memiavl",
-			StateStoreBackend:      "pebbledb",
-			KeepRecent:             0,
+			Enabled:                            false,
+			StateCommitmentBackend:             "memiavl",
+			StateStoreBackend:                  "pebbledb",
+			KeepRecent:                         0,
 			HistoricalProofQueryMaxConcurrency: 0,
+			MemIAVL:                            memiavl.DefaultConfig(),
 		},
 	}
 }

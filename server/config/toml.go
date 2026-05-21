@@ -246,6 +246,44 @@ stop-node-on-err = {{ .Streaming.ABCI.StopNodeOnErr }}
 # Note, this configuration only applies to SDK built-in app-side mempool
 # implementations.
 max-txs = {{ .Mempool.MaxTxs }}
+
+###############################################################################
+###                         MemIAVL (SeiDB SC)                                ###
+###############################################################################
+
+[memiavl]
+
+# Enable defines if the memiavl state-commit backend should be enabled (also enables SeiDB).
+enable = {{ .MemIAVL.Enable }}
+
+# ZeroCopy defines if the memiavl should return slices pointing to mmap-ed buffers directly (zero-copy),
+# the zero-copied slices must not be retained beyond current block's execution.
+zero-copy = {{ .MemIAVL.ZeroCopy }}
+
+# AsyncCommitBuffer defines the size of asynchronous commit queue, this greatly improve block catching-up
+# performance, -1 means synchronous commit.
+async-commit-buffer = {{ .MemIAVL.AsyncCommitBuffer }}
+
+# SnapshotKeepRecent defines what many old snapshots (excluding the latest one) to keep after new snapshots are taken.
+snapshot-keep-recent = {{ .MemIAVL.SnapshotKeepRecent }}
+
+# SnapshotInterval defines the block interval the memiavl snapshot is taken, default to 10000.
+snapshot-interval = {{ .MemIAVL.SnapshotInterval }}
+
+# SnapshotMinTimeInterval defines the minimum time interval (in seconds) between snapshots during catch-up.
+snapshot-min-time-interval = {{ .MemIAVL.SnapshotMinTimeInterval }}
+
+# SnapshotWriterLimit defines the concurrency for taking commit store snapshot.
+snapshot-writer-limit = {{ .MemIAVL.SnapshotWriterLimit }}
+
+# SnapshotPrefetchThreshold defines the page cache residency threshold (0.0-1.0) to trigger snapshot prefetch.
+snapshot-prefetch-threshold = {{ .MemIAVL.SnapshotPrefetchThreshold }}
+
+# SnapshotWriteRateMBps is the global snapshot write rate limit in MB/s. 0 = unlimited.
+snapshot-write-rate-mbps = {{ .MemIAVL.SnapshotWriteRateMBps }}
+
+# CacheSize defines the size of the cache for each memiavl store (reserved for future use).
+cache-size = {{ .MemIAVL.CacheSize }}
 `
 
 var configTemplate *template.Template

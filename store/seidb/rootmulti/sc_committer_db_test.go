@@ -3,7 +3,7 @@ package rootmulti
 import (
 	"testing"
 
-	ciavl "github.com/cosmos/iavl"
+	ciavl "cosmossdk.io/store/seidb/sc/sei-iavl"
 	dbm "github.com/cosmos/cosmos-db"
 	sdkiavl "cosmossdk.io/store/iavl"
 	"cosmossdk.io/store/metrics"

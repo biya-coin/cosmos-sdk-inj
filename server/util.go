@@ -26,6 +26,7 @@ import (
 
 	"cosmossdk.io/log"
 	"cosmossdk.io/store"
+	"cosmossdk.io/store/seidb/sc/memiavl"
 	"cosmossdk.io/store/snapshots"
 	snapshottypes "cosmossdk.io/store/snapshots/types"
 	storetypes "cosmossdk.io/store/types"
@@ -576,21 +577,44 @@ func GetStoreConfig(appOpts types.AppOptions) store.StoreConfig {
 		cfg.Backend = store.StoreBackendType(backend)
 	}
 
-	cfg.SeiDB.Enabled = cast.ToBool(appOpts.Get(FlagSeiDBEnabled))
+	cfg.SeiDB.MemIAVL = store.MemIAVLConfigFromAppOpts(appOpts)
+
+	seidbEnabled := cast.ToBool(appOpts.Get(FlagSeiDBEnabled))
+	if cfg.SeiDB.MemIAVL.Enable || seidbEnabled {
+		cfg.SeiDB.Enabled = true
+		cfg.Backend = store.StoreBackendSeiDB
+	}
+	if cfg.SeiDB.MemIAVL.Enable {
+		cfg.SeiDB.StateCommitmentBackend = "memiavl"
+	}
+
 	cfg.SeiDB.Home = cast.ToString(appOpts.Get(FlagSeiDBHome))
 	if cfg.SeiDB.Home == "" {
 		cfg.SeiDB.Home = cast.ToString(appOpts.Get(flags.FlagHome))
 	}
-	cfg.SeiDB.StateCommitmentBackend = cast.ToString(appOpts.Get(FlagSeiDBSCBackend))
+	if scBackend := cast.ToString(appOpts.Get(FlagSeiDBSCBackend)); scBackend != "" {
+		cfg.SeiDB.StateCommitmentBackend = scBackend
+	}
 	cfg.SeiDB.StateStoreBackend = cast.ToString(appOpts.Get(FlagSeiDBSSBackend))
 	cfg.SeiDB.KeepRecent = cast.ToUint64(appOpts.Get(FlagSeiDBKeepRecent))
 	cfg.SeiDB.HistoricalProofQueryMaxConcurrency = cast.ToUint32(appOpts.Get(FlagSeiDBHistoricalProofMaxConcurrency))
 
-	if cfg.SeiDB.Enabled {
-		cfg.Backend = store.StoreBackendSeiDB
-	}
-
 	return cfg.Normalize()
+}
+
+// AddMemIAVLFlags registers [memiavl] CLI flags (also read from app.toml via viper).
+func AddMemIAVLFlags(fs *pflag.FlagSet) {
+	def := memiavl.DefaultConfig()
+	fs.Bool(store.MemIAVLOptionEnable, def.Enable, "Enable SeiDB state-commit via memIAVL ([memiavl] enable)")
+	fs.Bool(store.MemIAVLOptionZeroCopy, def.ZeroCopy, "memIAVL zero-copy reads from mmap snapshot buffers")
+	fs.Int(store.MemIAVLOptionCacheSize, def.CacheSize, "Per-store LRU cache size on memIAVL trees (reserved)")
+	fs.Int(store.MemIAVLOptionAsyncCommitBuffer, def.AsyncCommitBuffer, "Async WAL commit queue size; <=0 means synchronous commit")
+	fs.Uint32(store.MemIAVLOptionSnapshotKeepRecent, def.SnapshotKeepRecent, "Old memIAVL snapshots to retain besides the latest")
+	fs.Uint32(store.MemIAVLOptionSnapshotInterval, def.SnapshotInterval, "Block interval between memIAVL snapshots")
+	fs.Uint32(store.MemIAVLOptionSnapshotMinTimeInterval, def.SnapshotMinTimeInterval, "Minimum seconds between memIAVL snapshots during catch-up")
+	fs.Int(store.MemIAVLOptionSnapshotWriterLimit, def.SnapshotWriterLimit, "Concurrency limit when writing memIAVL snapshots")
+	fs.Float64(store.MemIAVLOptionSnapshotPrefetchThreshold, def.SnapshotPrefetchThreshold, "Page-cache residency threshold to skip snapshot prefetch (0-1)")
+	fs.Int(store.MemIAVLOptionSnapshotWriteRateMBps, def.SnapshotWriteRateMBps, "Global memIAVL snapshot write rate limit in MB/s (0 = unlimited)")
 }
 
 func GetSnapshotStore(appOpts types.AppOptions) (*snapshots.Store, error) {

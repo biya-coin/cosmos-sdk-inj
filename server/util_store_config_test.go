@@ -33,6 +33,21 @@ func TestGetStoreConfig_SeiDBEnabled(t *testing.T) {
 	require.Equal(t, uint64(42), cfg.SeiDB.KeepRecent)
 }
 
+func TestGetStoreConfig_MemiAVLEnable(t *testing.T) {
+	v := viper.New()
+	v.Set(store.MemIAVLOptionEnable, true)
+	v.Set(store.MemIAVLOptionSnapshotInterval, uint32(1000))
+	v.Set(store.MemIAVLOptionAsyncCommitBuffer, 0)
+
+	cfg := GetStoreConfig(v)
+
+	require.Equal(t, store.StoreBackendType(store.StoreBackendSeiDB), cfg.Backend)
+	require.True(t, cfg.SeiDB.Enabled)
+	require.Equal(t, "memiavl", cfg.SeiDB.StateCommitmentBackend)
+	require.Equal(t, uint32(1000), cfg.SeiDB.MemIAVL.SnapshotInterval)
+	require.Equal(t, 0, cfg.SeiDB.MemIAVL.AsyncCommitBuffer)
+}
+
 func TestGetStoreConfig_SeiDBHomeFallsBackToNodeHome(t *testing.T) {
 	v := viper.New()
 	v.Set(FlagSeiDBEnabled, true)

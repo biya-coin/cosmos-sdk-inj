@@ -9,6 +9,7 @@ import (
 	"cosmossdk.io/log"
 	"cosmossdk.io/store/metrics"
 	"cosmossdk.io/store/seidb/commitment"
+	"cosmossdk.io/store/seidb/sc/memiavl"
 	"cosmossdk.io/store/types"
 	dbm "github.com/cosmos/cosmos-db"
 	"github.com/stretchr/testify/require"
@@ -18,23 +19,82 @@ const testStateStoreBackend = "scbacked-test"
 
 var registerStateStoreBackendOnce sync.Once
 
+func testMemIAVLConfig(t *testing.T) Config {
+	t.Helper()
+	return Config{
+		Home:                   t.TempDir(),
+		StateCommitmentBackend: "memiavl",
+		StateStoreBackend:      "pebbledb",
+		MemIAVL:                memiavl.DefaultConfig(),
+	}
+}
+
 func ensureTestStateStoreBackend(t *testing.T) string {
 	t.Helper()
 	registerStateStoreBackendOnce.Do(func() {
-		err := RegisterStateStoreBuilder(testStateStoreBackend, func(_ dbm.DB, _ Config, sc SCCommitter) (StateStore, error) {
-			return newSCBackedStateStore(sc), nil
+		err := RegisterStateStoreBuilder(testStateStoreBackend, func(_ dbm.DB, _ Config, scStore SCStore) (StateStore, error) {
+			return newSCBackedStateStore(scStore), nil
 		})
 		require.NoError(t, err)
 	})
 	return testStateStoreBackend
 }
 
-type failingSCCommitter struct{}
+type failingSCStore struct{}
 
-func (failingSCCommitter) ApplyChangeSets(_ []*NamedChangeSet) error { return nil }
-func (failingSCCommitter) Commit(_ int64) error                      { return fmt.Errorf("forced sc failure") }
+func (failingSCStore) ApplyChangeSets(_ []*NamedChangeSet) error { return nil }
+func (failingSCStore) Commit(_ int64) error                      { return fmt.Errorf("forced sc failure") }
 
-type rollbackTrackingSCCommitter struct {
+type memorySCStore struct {
+	mtx     sync.Mutex
+	version int64
+	data    map[string]map[string][]byte
+}
+
+func newMemorySCStore() *memorySCStore {
+	return &memorySCStore{data: make(map[string]map[string][]byte)}
+}
+
+func (m *memorySCStore) ApplyChangeSets(changeSets []*NamedChangeSet) error {
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
+	for _, named := range changeSets {
+		if named == nil || named.ChangeSet == nil {
+			continue
+		}
+		if _, ok := m.data[named.Name]; !ok {
+			m.data[named.Name] = make(map[string][]byte)
+		}
+		moduleStore := m.data[named.Name]
+		for _, pair := range named.ChangeSet.Pairs {
+			if pair == nil {
+				continue
+			}
+			key := string(pair.Key)
+			if pair.Delete {
+				delete(moduleStore, key)
+				continue
+			}
+			moduleStore[key] = append([]byte(nil), pair.Value...)
+		}
+	}
+	return nil
+}
+
+func (m *memorySCStore) Commit(version int64) error {
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
+	if version <= 0 {
+		return fmt.Errorf("invalid commit version: %d", version)
+	}
+	if version <= m.version {
+		return fmt.Errorf("non-monotonic commit version: current=%d next=%d", m.version, version)
+	}
+	m.version = version
+	return nil
+}
+
+type rollbackTrackingSCStore struct {
 	rollbackCalled bool
 	rollbackErr    error
 	hasVersion      bool
@@ -42,17 +102,17 @@ type rollbackTrackingSCCommitter struct {
 	currentVersion   int64
 }
 
-func (c *rollbackTrackingSCCommitter) ApplyChangeSets(_ []*NamedChangeSet) error { return nil }
-func (c *rollbackTrackingSCCommitter) Commit(_ int64) error                      { return nil }
-func (c *rollbackTrackingSCCommitter) RollbackToVersion(_ int64) error {
+func (c *rollbackTrackingSCStore) ApplyChangeSets(_ []*NamedChangeSet) error { return nil }
+func (c *rollbackTrackingSCStore) Commit(_ int64) error                      { return nil }
+func (c *rollbackTrackingSCStore) RollbackToVersion(_ int64) error {
 	c.rollbackCalled = true
 	return c.rollbackErr
 }
-func (c *rollbackTrackingSCCommitter) HasVersion(_ int64) bool {
+func (c *rollbackTrackingSCStore) HasVersion(_ int64) bool {
 	c.hasVersionCalled = true
 	return c.hasVersion
 }
-func (c *rollbackTrackingSCCommitter) CurrentVersion() int64 {
+func (c *rollbackTrackingSCStore) CurrentVersion() int64 {
 	return c.currentVersion
 }
 
@@ -87,13 +147,9 @@ func (s *rollbackTrackingStateStore) Close() error { return nil }
 
 func TestNewStore_ConfigRoundTrip(t *testing.T) {
 	db := dbm.NewMemDB()
-	cfg := Config{
-		Home:                   "/tmp/seidb",
-		StateCommitmentBackend: "memiavl",
-		StateStoreBackend:      ensureTestStateStoreBackend(t),
-		KeepRecent:             128,
-		HistoricalProofQueryMaxConcurrency: 4,
-	}
+	cfg := testMemIAVLConfig(t)
+	cfg.KeepRecent = 128
+	cfg.HistoricalProofQueryMaxConcurrency = 4
 
 	store := NewStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics(), cfg)
 	require.NotNil(t, store)
@@ -226,7 +282,7 @@ func TestCacheMultiStore_RegistersObjectAndTransientStores(t *testing.T) {
 func TestStore_SCFailurePanicsCommit(t *testing.T) {
 	db := dbm.NewMemDB()
 	store := NewStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics(), Config{})
-	store.SetSCCommitter(failingSCCommitter{})
+	store.SetSCStore(failingSCStore{})
 	key := types.NewKVStoreKey("test")
 
 	store.MountStoreWithDB(key, types.StoreTypeIAVL, nil)
@@ -246,10 +302,7 @@ func TestStore_SCFailurePanicsCommit(t *testing.T) {
 
 func TestStore_CommitAcceptsEmptyValue(t *testing.T) {
 	db := dbm.NewMemDB()
-	store := NewStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics(), Config{
-		StateCommitmentBackend: "memiavl",
-		StateStoreBackend:      ensureTestStateStoreBackend(t),
-	})
+	store := NewStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics(), testMemIAVLConfig(t))
 	key := types.NewKVStoreKey("test")
 	store.MountStoreWithDB(key, types.StoreTypeIAVL, nil)
 	require.NoError(t, store.LoadLatestVersion())
@@ -271,12 +324,32 @@ func TestStore_CommitAcceptsEmptyValue(t *testing.T) {
 	require.NotNil(t, res)
 }
 
+func TestCommit_AppHashFromSC(t *testing.T) {
+	db := dbm.NewMemDB()
+	store := NewStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics(), testMemIAVLConfig(t))
+	key := types.NewKVStoreKey("test")
+	store.MountStoreWithDB(key, types.StoreTypeIAVL, nil)
+	require.NoError(t, store.LoadLatestVersion())
+
+	kv := store.GetKVStore(key)
+	kv.Set([]byte("k"), []byte("v"))
+	workingHash := store.WorkingHash()
+	cid := store.Commit()
+	require.Equal(t, int64(1), cid.Version)
+	require.NotEmpty(t, cid.Hash)
+	require.Equal(t, workingHash, cid.Hash)
+
+	sc, ok := store.scStore.(*memIAVLStore)
+	require.True(t, ok)
+	scInfo := convertCommitInfo(sc.LastCommitInfo())
+	expected := amendCommitInfo(scInfo, store.storesParams).Hash()
+	require.Equal(t, expected, cid.Hash)
+	require.Equal(t, cid, store.LastCommitID())
+}
+
 func TestCacheMultiStoreWithVersion_UsesStateStoreForHistorical(t *testing.T) {
 	db := dbm.NewMemDB()
-	store := NewStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics(), Config{
-		StateCommitmentBackend: "memiavl",
-		StateStoreBackend:      ensureTestStateStoreBackend(t),
-	})
+	store := NewStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics(), testMemIAVLConfig(t))
 	key := types.NewKVStoreKey("test")
 
 	store.MountStoreWithDB(key, types.StoreTypeIAVL, nil)
@@ -303,10 +376,7 @@ func TestCacheMultiStoreWithVersion_UsesStateStoreForHistorical(t *testing.T) {
 
 func TestQuery_HistoricalNoProofUsesStateSnapshot(t *testing.T) {
 	db := dbm.NewMemDB()
-	store := NewStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics(), Config{
-		StateCommitmentBackend: "memiavl",
-		StateStoreBackend:      ensureTestStateStoreBackend(t),
-	})
+	store := NewStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics(), testMemIAVLConfig(t))
 	key := types.NewKVStoreKey("test")
 
 	store.MountStoreWithDB(key, types.StoreTypeIAVL, nil)
@@ -333,9 +403,8 @@ func TestQuery_HistoricalNoProofUsesStateSnapshot(t *testing.T) {
 
 func TestQuery_HistoricalProofUsesRuntimePath(t *testing.T) {
 	db := dbm.NewMemDB()
-	store := NewStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics(), Config{
-		StateCommitmentBackend: "memiavl",
-	})
+	// Historical proof still routes through runtime IAVL; keep SC disabled for this test.
+	store := NewStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics(), Config{})
 	key := types.NewKVStoreKey("test")
 
 	store.MountStoreWithDB(key, types.StoreTypeIAVL, nil)
@@ -363,10 +432,9 @@ func TestQuery_HistoricalProofUsesRuntimePath(t *testing.T) {
 
 func TestCacheMultiStoreWithVersion_ErrWhenSSUnavailable(t *testing.T) {
 	db := dbm.NewMemDB()
-	store := NewStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics(), Config{
-		StateCommitmentBackend: "memiavl",
-		StateStoreBackend:      "",
-	})
+	cfg := testMemIAVLConfig(t)
+	cfg.StateStoreBackend = ""
+	store := NewStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics(), cfg)
 	key := types.NewKVStoreKey("test")
 
 	store.MountStoreWithDB(key, types.StoreTypeIAVL, nil)
@@ -386,10 +454,9 @@ func TestCacheMultiStoreWithVersion_ErrWhenSSUnavailable(t *testing.T) {
 
 func TestQuery_HistoricalNoProofErrWhenSSUnavailable(t *testing.T) {
 	db := dbm.NewMemDB()
-	store := NewStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics(), Config{
-		StateCommitmentBackend: "memiavl",
-		StateStoreBackend:      "",
-	})
+	cfg := testMemIAVLConfig(t)
+	cfg.StateStoreBackend = ""
+	store := NewStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics(), cfg)
 	key := types.NewKVStoreKey("test")
 
 	store.MountStoreWithDB(key, types.StoreTypeIAVL, nil)
@@ -446,11 +513,9 @@ func TestQuery_HistoricalProofHonorsConcurrencyGate(t *testing.T) {
 
 func TestCacheMultiStoreWithVersion_ErrWhenStateHistoryUnavailable(t *testing.T) {
 	db := dbm.NewMemDB()
-	store := NewStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics(), Config{
-		StateCommitmentBackend: "memiavl",
-		KeepRecent:             1,
-		StateStoreBackend:      ensureTestStateStoreBackend(t),
-	})
+	cfg := testMemIAVLConfig(t)
+	cfg.KeepRecent = 1
+	store := NewStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics(), cfg)
 	key := types.NewKVStoreKey("test")
 
 	store.MountStoreWithDB(key, types.StoreTypeIAVL, nil)
@@ -470,10 +535,7 @@ func TestCacheMultiStoreWithVersion_ErrWhenStateHistoryUnavailable(t *testing.T)
 
 func TestRollbackToVersion_SyncsSCState(t *testing.T) {
 	db := dbm.NewMemDB()
-	store := NewStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics(), Config{
-		StateCommitmentBackend: "memiavl",
-		StateStoreBackend:      ensureTestStateStoreBackend(t),
-	})
+	store := NewStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics(), testMemIAVLConfig(t))
 	key := types.NewKVStoreKey("test")
 
 	store.MountStoreWithDB(key, types.StoreTypeIAVL, nil)
@@ -516,9 +578,9 @@ func TestRollbackToVersion_AttemptsBothSCAndSSEvenOnError(t *testing.T) {
 	kv.Set([]byte("k"), []byte("v2"))
 	store.Commit()
 
-	sc := &rollbackTrackingSCCommitter{rollbackErr: fmt.Errorf("sc rollback error")}
+	sc := &rollbackTrackingSCStore{rollbackErr: fmt.Errorf("sc rollback error")}
 	ss := &rollbackTrackingStateStore{rollbackErr: fmt.Errorf("ss rollback error")}
-	store.sc = sc
+	store.scStore = sc
 	store.ss = ss
 
 	err := store.RollbackToVersion(1)
@@ -531,9 +593,7 @@ func TestRollbackToVersion_AttemptsBothSCAndSSEvenOnError(t *testing.T) {
 
 func TestLoadLatestVersion_ChecksSCAndSSConsistency(t *testing.T) {
 	db := dbm.NewMemDB()
-	store := NewStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics(), Config{
-		StateStoreBackend: ensureTestStateStoreBackend(t),
-	})
+	store := NewStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics(), testMemIAVLConfig(t))
 	key := types.NewKVStoreKey("test")
 	store.MountStoreWithDB(key, types.StoreTypeIAVL, nil)
 	require.NoError(t, store.LoadLatestVersion())
@@ -542,9 +602,9 @@ func TestLoadLatestVersion_ChecksSCAndSSConsistency(t *testing.T) {
 	kv.Set([]byte("k"), []byte("v1"))
 	store.Commit()
 
-	sc := &rollbackTrackingSCCommitter{hasVersion: true, currentVersion: 1}
+	sc := &rollbackTrackingSCStore{hasVersion: true, currentVersion: 1}
 	ss := &rollbackTrackingStateStore{hasVersion: true}
-	store.sc = sc
+	store.scStore = sc
 	store.ss = ss
 
 	require.NoError(t, store.LoadLatestVersion())
@@ -554,9 +614,7 @@ func TestLoadLatestVersion_ChecksSCAndSSConsistency(t *testing.T) {
 
 func TestLoadLatestVersion_ReturnsConsistencyErrors(t *testing.T) {
 	db := dbm.NewMemDB()
-	store := NewStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics(), Config{
-		StateStoreBackend: ensureTestStateStoreBackend(t),
-	})
+	store := NewStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics(), testMemIAVLConfig(t))
 	key := types.NewKVStoreKey("test")
 	store.MountStoreWithDB(key, types.StoreTypeIAVL, nil)
 	require.NoError(t, store.LoadLatestVersion())
@@ -565,9 +623,9 @@ func TestLoadLatestVersion_ReturnsConsistencyErrors(t *testing.T) {
 	kv.Set([]byte("k"), []byte("v1"))
 	store.Commit()
 
-	sc := &rollbackTrackingSCCommitter{hasVersion: false, currentVersion: 0}
+	sc := &rollbackTrackingSCStore{hasVersion: false, currentVersion: 0}
 	ss := &rollbackTrackingStateStore{hasVersion: false}
-	store.sc = sc
+	store.scStore = sc
 	store.ss = ss
 
 	err := store.LoadLatestVersion()
@@ -599,40 +657,38 @@ func TestRollbackToVersion_InvalidTarget(t *testing.T) {
 }
 
 
-func TestStore_DefaultSCCommitterFromBackend(t *testing.T) {
+func TestStore_DefaultSCStoreFromBackend(t *testing.T) {
 	db := dbm.NewMemDB()
 
-	memStore := NewStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics(), Config{
-		StateCommitmentBackend: "memiavl",
-	})
-	require.IsType(t, &dbSCCommitter{}, memStore.sc)
+	memStore := NewStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics(), testMemIAVLConfig(t))
+	require.IsType(t, &memIAVLStore{}, memStore.scStore)
 
 	unknownStore := NewStore(dbm.NewMemDB(), log.NewNopLogger(), metrics.NewNoOpMetrics(), Config{
 		StateCommitmentBackend: "unknown-backend",
 	})
-	require.IsType(t, noopSCCommitter{}, unknownStore.sc)
+	require.IsType(t, noopSCStore{}, unknownStore.scStore)
 }
 
 func TestStore_UsesRegisteredSCBuilder(t *testing.T) {
 	backend := "custom-backend-for-test"
-	require.NoError(t, RegisterSCCommitterBuilder(backend, func(db dbm.DB, cfg Config) (SCCommitter, error) {
-		return newMemorySCCommitter(), nil
+	require.NoError(t, RegisterSCStoreBuilder(backend, func(_ dbm.DB, _ Config) (SCStore, error) {
+		return newMemorySCStore(), nil
 	}))
 
 	store := NewStore(dbm.NewMemDB(), log.NewNopLogger(), metrics.NewNoOpMetrics(), Config{
 		StateCommitmentBackend: backend,
 	})
-	require.IsType(t, &memorySCCommitter{}, store.sc)
+	require.IsType(t, &memorySCStore{}, store.scStore)
 }
 
 func TestStore_BuilderErrorFallsBackToNoop(t *testing.T) {
 	backend := "error-backend-for-test"
-	require.NoError(t, RegisterSCCommitterBuilder(backend, func(db dbm.DB, cfg Config) (SCCommitter, error) {
+	require.NoError(t, RegisterSCStoreBuilder(backend, func(_ dbm.DB, _ Config) (SCStore, error) {
 		return nil, fmt.Errorf("boom")
 	}))
 
 	store := NewStore(dbm.NewMemDB(), log.NewNopLogger(), metrics.NewNoOpMetrics(), Config{
 		StateCommitmentBackend: backend,
 	})
-	require.IsType(t, noopSCCommitter{}, store.sc)
+	require.IsType(t, noopSCStore{}, store.scStore)
 }

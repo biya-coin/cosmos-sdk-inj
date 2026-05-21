@@ -392,6 +392,88 @@ func (rs *storev2Runtime) Commit() types.CommitID {
 	}
 }
 
+// SyncCommitMetadata records the SC commit info in the legacy metadata DB without
+// committing mounted IAVL trees (Phase B: AppHash is owned by memiavl SC).
+func (rs *storev2Runtime) SyncCommitMetadata(version int64, info *types.CommitInfo) {
+	if info == nil {
+		info = &types.CommitInfo{Version: version}
+	}
+	rs.pausePruning(true)
+	rs.lastCommitInfo = info
+	rs.pausePruning(false)
+
+	rs.flushMetadata(version, info)
+
+	storeKeys := runtimeKeysFromStoreKeyMap(rs.stores)
+	for _, key := range storeKeys {
+		if rs.removalMap[key] {
+			continue
+		}
+		if rs.stores[key].GetStoreType() == types.StoreTypeIAVL {
+			continue
+		}
+		_ = rs.stores[key].Commit()
+	}
+
+	for sk := range rs.removalMap {
+		if _, ok := rs.stores[sk]; ok {
+			delete(rs.stores, sk)
+			delete(rs.storesParams, sk)
+			delete(rs.keysByName, sk.Name())
+		}
+	}
+	rs.removalMap = make(map[types.StoreKey]bool)
+
+	if err := rs.handlePruning(version); err != nil {
+		rs.logger.Error("failed to prune store, please check your pruning configuration", "err", err)
+	}
+}
+
+// LoadVersionForSCBackedCommit reloads multistore metadata for the target height while
+// keeping legacy cosmos/iavl trees at their on-disk version (Phase B: SC owns IAVL data).
+func (rs *storev2Runtime) LoadVersionForSCBackedCommit(version int64) error {
+	if version == 0 {
+		version = rs.getLatestVersion()
+	}
+
+	infos := make(map[string]types.StoreInfo)
+	cInfo := &types.CommitInfo{}
+	if version != 0 {
+		var err error
+		cInfo, err = rs.GetCommitInfo(version)
+		if err != nil {
+			return err
+		}
+		for _, storeInfo := range cInfo.StoreInfos {
+			infos[storeInfo.Name] = storeInfo
+		}
+	}
+
+	storeKeys := runtimeKeysFromStoreKeyMap(rs.storesParams)
+	newStores := make(map[types.StoreKey]types.CommitStore, len(storeKeys))
+	for _, key := range storeKeys {
+		params := rs.storesParams[key]
+		commitID := rs.getCommitID(infos, key.Name())
+		if params.typ == types.StoreTypeIAVL {
+			commitID = types.CommitID{}
+		}
+
+		store, err := rs.loadCommitStoreFromParams(key, commitID, params)
+		if err != nil {
+			return fmt.Errorf("failed to load store: %w", err)
+		}
+		newStores[key] = store
+	}
+
+	rs.lastCommitInfo = cInfo
+	rs.stores = newStores
+
+	if err := rs.pruningManager.LoadSnapshotHeights(rs.db); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (rs *storev2Runtime) WorkingHash() []byte {
 	storeInfos := make([]types.StoreInfo, 0, len(rs.stores))
 	storeKeys := runtimeKeysFromStoreKeyMap(rs.stores)
