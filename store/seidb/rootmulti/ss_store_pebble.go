@@ -6,9 +6,13 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	dbm "github.com/cosmos/cosmos-db"
 
+	scproto "cosmossdk.io/store/seidb/sc/proto"
+	scwal "cosmossdk.io/store/seidb/sc/wal"
+	iavl "cosmossdk.io/store/seidb/sc/sei-iavl"
 	"cosmossdk.io/store/types"
 )
 
@@ -20,14 +24,19 @@ const (
 )
 
 type pebbleStateStore struct {
-	mtx            sync.RWMutex
-	db             dbm.DB
-	keepRecent     int64
-	version        int64
-	earliest       int64
-	state          map[string]map[string][]byte
-	versionBase    map[int64]int64
+	mtx             sync.RWMutex
+	db              dbm.DB
+	keepRecent      int64
+	version         int64
+	earliest        int64
+	state           map[string]map[string][]byte
+	versionBase     map[int64]int64
 	closeOnShutdown bool
+
+	// WAL for crash recovery (对标 sei-db composite/store.go 的 Cosmos changelog).
+	// nil when WAL is disabled or failed to open (degraded mode).
+	changelog    scwal.ChangelogWAL
+	changelogDir string
 }
 
 func newPebbleStateStore(cfg Config) (StateStore, error) {
@@ -59,6 +68,35 @@ func newPebbleStateStore(cfg Config) (StateStore, error) {
 		if baseVersion > 0 {
 			store.state = store.loadSnapshot(baseVersion)
 		}
+	}
+
+	// Open WAL for crash recovery (对标 sei-db mvcc Database.streamHandler).
+	// KeepRecent: keep at least 1000 entries so a lagging replica can always replay.
+	// PruneInterval: background ticker, same 30s cadence as sei-db.
+	changelogDir := filepath.Join(cfg.Home, "data", "seidb-ss-changelog")
+	if mkErr := os.MkdirAll(changelogDir, 0o755); mkErr == nil {
+		keepN := uint64(1000)
+		if cfg.KeepRecent > 0 && uint64(cfg.KeepRecent)+1 > keepN {
+			keepN = uint64(cfg.KeepRecent) + 1
+		}
+		changelog, walErr := scwal.NewChangelogWAL(changelogDir, scwal.Config{
+			KeepRecent:    keepN,
+			PruneInterval: 30 * time.Second,
+		})
+		if walErr == nil {
+			store.changelog = changelog
+			store.changelogDir = changelogDir
+		}
+		// WAL open failure is non-fatal: node runs without WAL (no crash recovery).
+	}
+
+	// Replay any WAL entries newer than the persisted DB version (对标 RecoverCompositeStateStore).
+	if err := store.recoverFromWAL(); err != nil {
+		if store.changelog != nil {
+			_ = store.changelog.Close()
+		}
+		_ = ssDB.Close()
+		return nil, fmt.Errorf("ss wal recovery failed: %w", err)
 	}
 
 	return store, nil
@@ -97,6 +135,9 @@ func (s *pebbleStateStore) EarliestVersion() int64 {
 	return s.earliest
 }
 
+// ApplyChangeSets writes a WAL entry first (for crash recovery), then updates the in-memory
+// state and persists a full snapshot to DB.  This mirrors sei-db's ApplyChangesetAsync which
+// calls streamHandler.Write before enqueueing the Pebble batch.
 func (s *pebbleStateStore) ApplyChangeSets(version int64, changeSets []*NamedChangeSet) error {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
@@ -105,6 +146,25 @@ func (s *pebbleStateStore) ApplyChangeSets(version int64, changeSets []*NamedCha
 		return err
 	}
 
+	// Write WAL before touching DB (对标 ApplyChangesetAsync → streamHandler.Write).
+	if s.changelog != nil && len(changeSets) > 0 {
+		entry := scproto.ChangelogEntry{
+			Version:    version,
+			Changesets: toProtoChangeSets(changeSets),
+		}
+		if err := s.changelog.Write(entry); err != nil {
+			return fmt.Errorf("ss wal write at version %d: %w", version, err)
+		}
+	}
+
+	return s.applyChangeSetsNoWAL(version, changeSets)
+}
+
+// applyChangeSetsNoWAL applies changesets to in-memory state and persists them to DB without
+// writing a WAL entry.  Used both by ApplyChangeSets (after WAL write) and by recoverFromWAL
+// (during startup replay).  Callers are responsible for holding the appropriate lock or ensuring
+// single-threaded access.
+func (s *pebbleStateStore) applyChangeSetsNoWAL(version int64, changeSets []*NamedChangeSet) error {
 	for _, named := range changeSets {
 		if named == nil || named.ChangeSet == nil || len(named.ChangeSet.Pairs) == 0 {
 			continue
@@ -154,6 +214,7 @@ func (s *pebbleStateStore) SetLatestVersion(version int64) error {
 	return s.commitVersionLocked(version)
 }
 
+// RollbackToVersion rolls back state to target, also truncating any WAL entries newer than target.
 func (s *pebbleStateStore) RollbackToVersion(target int64) error {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
@@ -196,7 +257,39 @@ func (s *pebbleStateStore) RollbackToVersion(target int64) error {
 		return err
 	}
 
-	return batch.WriteSync()
+	if err := batch.WriteSync(); err != nil {
+		return err
+	}
+
+	// Truncate WAL entries newer than target (对标 sei-db rollback 截断 changelog).
+	s.truncateWALAfterVersion(target)
+
+	return nil
+}
+
+// truncateWALAfterVersion removes all WAL entries with Version > target.
+// Errors are non-fatal: a corrupt WAL tail is simply left for the next startup recovery.
+func (s *pebbleStateStore) truncateWALAfterVersion(target int64) {
+	if s.changelog == nil {
+		return
+	}
+	firstOffset, err := s.changelog.FirstOffset()
+	if err != nil || firstOffset == 0 {
+		return
+	}
+	lastOffset, err := s.changelog.LastOffset()
+	if err != nil || lastOffset == 0 {
+		return
+	}
+
+	// Find first offset with Version > target; truncate from there onwards.
+	startOffset, err := findSSReplayStartOffset(s.changelog, firstOffset, lastOffset, target)
+	if err != nil {
+		return
+	}
+	if startOffset <= lastOffset {
+		_ = s.changelog.TruncateAfter(startOffset)
+	}
 }
 
 func (s *pebbleStateStore) SyncFromStores(stores map[types.StoreKey]types.CommitKVStore, version int64) error {
@@ -317,11 +410,140 @@ func (s *pebbleStateStore) ImportSnapshot(version int64, nodes <-chan SnapshotIm
 func (s *pebbleStateStore) Close() error {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
+
+	// Close WAL before DB so in-flight writes are drained first.
+	if s.changelog != nil {
+		_ = s.changelog.Close()
+		s.changelog = nil
+	}
+
 	if !s.closeOnShutdown || s.db == nil {
 		return nil
 	}
 	return s.db.Close()
 }
+
+// =============================================================================
+// WAL crash recovery (对标 sei-db RecoverCompositeStateStore / ReplayWAL)
+// =============================================================================
+
+// recoverFromWAL replays any WAL entries whose Version is newer than the latest persisted DB
+// version, bringing state back to the point of the last WAL write.  Mirrors
+// RecoverCompositeStateStore in sei-db/state_db/ss/composite/store.go.
+//
+// Called single-threaded during construction; no lock is held.
+func (s *pebbleStateStore) recoverFromWAL() error {
+	if s.changelog == nil {
+		return nil
+	}
+
+	firstOffset, err := s.changelog.FirstOffset()
+	if err != nil {
+		return fmt.Errorf("ss wal: read first offset: %w", err)
+	}
+	if firstOffset == 0 {
+		return nil // WAL is empty
+	}
+
+	lastOffset, err := s.changelog.LastOffset()
+	if err != nil {
+		return fmt.Errorf("ss wal: read last offset: %w", err)
+	}
+	if lastOffset == 0 {
+		return nil
+	}
+
+	lastEntry, err := s.changelog.ReadAt(lastOffset)
+	if err != nil {
+		return fmt.Errorf("ss wal: read last entry: %w", err)
+	}
+	if lastEntry.Version <= s.version {
+		return nil // DB is already at or ahead of WAL; nothing to replay
+	}
+
+	startOffset, err := findSSReplayStartOffset(s.changelog, firstOffset, lastOffset, s.version)
+	if err != nil {
+		return fmt.Errorf("ss wal: find replay start: %w", err)
+	}
+	if startOffset > lastOffset {
+		return nil
+	}
+
+	return s.changelog.Replay(startOffset, lastOffset, func(_ uint64, entry scproto.ChangelogEntry) error {
+		if entry.Version <= s.version {
+			return nil
+		}
+		// validateNextVersionLocked is satisfied because we replay in order;
+		// call applyChangeSetsNoWAL directly (no WAL re-write during recovery).
+		if err := s.validateNextVersionLocked(entry.Version); err != nil {
+			return fmt.Errorf("ss wal replay: version check at %d: %w", entry.Version, err)
+		}
+		return s.applyChangeSetsNoWAL(entry.Version, fromProtoChangeSets(entry.Changesets))
+	})
+}
+
+// findSSReplayStartOffset returns the first WAL offset whose entry.Version > targetVersion.
+// Mirrors findReplayStartOffset in sei-db/state_db/ss/composite/store.go (binary search).
+func findSSReplayStartOffset(changelog scwal.ChangelogWAL, first, last uint64, targetVersion int64) (uint64, error) {
+	lo, hi := first, last
+	result := last + 1 // sentinel: "no entry found"
+
+	for lo <= hi {
+		mid := lo + (hi-lo)/2
+		entry, err := changelog.ReadAt(mid)
+		if err != nil {
+			return 0, fmt.Errorf("ss wal: read at offset %d: %w", mid, err)
+		}
+		if entry.Version > targetVersion {
+			result = mid
+			if mid == first {
+				break
+			}
+			hi = mid - 1
+		} else {
+			lo = mid + 1
+		}
+	}
+	return result, nil
+}
+
+// =============================================================================
+// Proto conversion helpers
+// =============================================================================
+
+// fromProtoChangeSets converts proto NamedChangeSets back to rootmulti NamedChangeSets.
+// This is the inverse of toProtoChangeSets (defined in changeset_convert.go).
+func fromProtoChangeSets(proto []*scproto.NamedChangeSet) []*NamedChangeSet {
+	if len(proto) == 0 {
+		return nil
+	}
+	out := make([]*NamedChangeSet, 0, len(proto))
+	for _, p := range proto {
+		if p == nil {
+			continue
+		}
+		pairs := make([]*iavl.KVPair, 0, len(p.Changeset.Pairs))
+		for _, pair := range p.Changeset.Pairs {
+			if pair == nil {
+				continue
+			}
+			pairs = append(pairs, &iavl.KVPair{
+				Key:    pair.Key,
+				Value:  pair.Value,
+				Delete: pair.Delete,
+			})
+		}
+		out = append(out, &NamedChangeSet{
+			Name:      p.Name,
+			ChangeSet: &iavl.ChangeSet{Pairs: pairs},
+		})
+	}
+	return out
+}
+
+// =============================================================================
+// Internal helpers (unchanged from original)
+// =============================================================================
 
 func (s *pebbleStateStore) loadVersionMetadata() {
 	latest, err := s.db.Get([]byte(ssLatestVersionKey))
