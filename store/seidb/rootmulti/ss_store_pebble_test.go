@@ -194,3 +194,111 @@ func TestSSWALRollback(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, []byte("3"), snap["k"])
 }
+
+func TestPebbleStateStore_MVCCGetAndDelete(t *testing.T) {
+	home := t.TempDir()
+	cfg := Config{Home: home, KeepRecent: 0}
+
+	raw, err := newPebbleStateStore(cfg)
+	require.NoError(t, err)
+	ss := raw.(*pebbleStateStore)
+	defer ss.Close()
+
+	require.NoError(t, ss.ApplyChangeSets(1, []*NamedChangeSet{
+		{
+			Name: "bank",
+			ChangeSet: &ciavl.ChangeSet{
+				Pairs: []*ciavl.KVPair{{Key: []byte("k"), Value: []byte("v1")}},
+			},
+		},
+	}))
+	require.NoError(t, ss.ApplyChangeSets(2, []*NamedChangeSet{
+		{
+			Name: "bank",
+			ChangeSet: &ciavl.ChangeSet{
+				Pairs: []*ciavl.KVPair{{Key: []byte("k"), Value: []byte("v2")}},
+			},
+		},
+	}))
+	require.NoError(t, ss.ApplyChangeSets(3, []*NamedChangeSet{
+		{
+			Name: "bank",
+			ChangeSet: &ciavl.ChangeSet{
+				Pairs: []*ciavl.KVPair{{Key: []byte("k"), Delete: true}},
+			},
+		},
+	}))
+
+	v1, err := ss.Get("bank", 1, []byte("k"))
+	require.NoError(t, err)
+	require.Equal(t, []byte("v1"), v1)
+
+	v2, err := ss.Get("bank", 2, []byte("k"))
+	require.NoError(t, err)
+	require.Equal(t, []byte("v2"), v2)
+
+	v3, err := ss.Get("bank", 3, []byte("k"))
+	require.NoError(t, err)
+	require.Nil(t, v3)
+}
+
+func TestPebbleStateStore_MVCCIterators(t *testing.T) {
+	home := t.TempDir()
+	cfg := Config{Home: home, KeepRecent: 0}
+
+	raw, err := newPebbleStateStore(cfg)
+	require.NoError(t, err)
+	ss := raw.(*pebbleStateStore)
+	defer ss.Close()
+
+	require.NoError(t, ss.ApplyChangeSets(1, []*NamedChangeSet{
+		{
+			Name: "bank",
+			ChangeSet: &ciavl.ChangeSet{
+				Pairs: []*ciavl.KVPair{
+					{Key: []byte("a"), Value: []byte("1")},
+					{Key: []byte("b"), Value: []byte("2")},
+				},
+			},
+		},
+	}))
+	require.NoError(t, ss.ApplyChangeSets(2, []*NamedChangeSet{
+		{
+			Name: "bank",
+			ChangeSet: &ciavl.ChangeSet{
+				Pairs: []*ciavl.KVPair{
+					{Key: []byte("a"), Value: []byte("1x")},
+					{Key: []byte("c"), Value: []byte("3")},
+				},
+			},
+		},
+	}))
+
+	itr, err := ss.Iterator("bank", 2, []byte("a"), []byte("d"))
+	require.NoError(t, err)
+	defer itr.Close()
+
+	var keys []string
+	var vals []string
+	for ; itr.Valid(); itr.Next() {
+		keys = append(keys, string(itr.Key()))
+		vals = append(vals, string(itr.Value()))
+	}
+	require.NoError(t, itr.Error())
+	require.Equal(t, []string{"a", "b", "c"}, keys)
+	require.Equal(t, []string{"1x", "2", "3"}, vals)
+
+	ritr, err := ss.ReverseIterator("bank", 2, []byte("a"), []byte("d"))
+	require.NoError(t, err)
+	defer ritr.Close()
+
+	keys = nil
+	vals = nil
+	for ; ritr.Valid(); ritr.Next() {
+		keys = append(keys, string(ritr.Key()))
+		vals = append(vals, string(ritr.Value()))
+	}
+	require.NoError(t, ritr.Error())
+	require.Equal(t, []string{"c", "b", "a"}, keys)
+	require.Equal(t, []string{"3", "2", "1x"}, vals)
+}

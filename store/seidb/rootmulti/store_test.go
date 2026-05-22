@@ -124,6 +124,18 @@ type rollbackTrackingStateStore struct {
 	hasVersionCalled bool
 }
 
+func (s *rollbackTrackingStateStore) Get(_ string, _ int64, _ []byte) ([]byte, error) {
+	return nil, nil
+}
+func (s *rollbackTrackingStateStore) Has(_ string, _ int64, _ []byte) (bool, error) {
+	return false, nil
+}
+func (s *rollbackTrackingStateStore) Iterator(_ string, _ int64, _, _ []byte) (types.Iterator, error) {
+	return emptyIterator{}, nil
+}
+func (s *rollbackTrackingStateStore) ReverseIterator(_ string, _ int64, _, _ []byte) (types.Iterator, error) {
+	return emptyIterator{}, nil
+}
 func (s *rollbackTrackingStateStore) Snapshot(_ string, _ int64) (map[string][]byte, bool) {
 	return nil, false
 }

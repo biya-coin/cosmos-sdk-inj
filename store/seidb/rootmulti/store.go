@@ -79,6 +79,10 @@ type runtimeBackend interface {
 }
 
 type historicalSnapshotReader interface {
+	Get(storeName string, version int64, key []byte) ([]byte, error)
+	Has(storeName string, version int64, key []byte) (bool, error)
+	Iterator(storeName string, version int64, start, end []byte) (types.Iterator, error)
+	ReverseIterator(storeName string, version int64, start, end []byte) (types.Iterator, error)
 	Snapshot(storeName string, version int64) (map[string][]byte, bool)
 	HasVersion(version int64) bool
 }
@@ -828,14 +832,10 @@ func (s *Store) iavlStoreNames() []string {
 	return names
 }
 
-func (s *Store) buildCacheStores(version int64, historical bool, readers ...interface {
-	Snapshot(storeName string, version int64) (map[string][]byte, bool)
-}) map[types.StoreKey]types.CacheWrapper {
+func (s *Store) buildCacheStores(version int64, historical bool, readers ...historicalSnapshotReader) map[types.StoreKey]types.CacheWrapper {
 	keys := s.sortedStoreKeys()
 
-	var snapshotReader interface {
-		Snapshot(storeName string, version int64) (map[string][]byte, bool)
-	}
+	var snapshotReader historicalSnapshotReader
 	if len(readers) > 0 {
 		snapshotReader = readers[0]
 	}

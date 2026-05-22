@@ -1,6 +1,7 @@
 package state
 
 import (
+	"sort"
 	"testing"
 
 	"cosmossdk.io/store/internal/kv"
@@ -10,6 +11,39 @@ import (
 
 type mockSnapshotReader struct {
 	data map[int64]map[string]map[string][]byte
+}
+
+func (m mockSnapshotReader) Get(storeName string, version int64, key []byte) ([]byte, error) {
+	snap, ok := m.Snapshot(storeName, version)
+	if !ok {
+		return nil, nil
+	}
+	return append([]byte(nil), snap[string(key)]...), nil
+}
+
+func (m mockSnapshotReader) Has(storeName string, version int64, key []byte) (bool, error) {
+	snap, ok := m.Snapshot(storeName, version)
+	if !ok {
+		return false, nil
+	}
+	_, found := snap[string(key)]
+	return found, nil
+}
+
+func (m mockSnapshotReader) Iterator(storeName string, version int64, start, end []byte) (types.Iterator, error) {
+	snap, ok := m.Snapshot(storeName, version)
+	if !ok {
+		return emptyIterator{}, nil
+	}
+	return newMapIterator(snap, start, end, true), nil
+}
+
+func (m mockSnapshotReader) ReverseIterator(storeName string, version int64, start, end []byte) (types.Iterator, error) {
+	snap, ok := m.Snapshot(storeName, version)
+	if !ok {
+		return emptyIterator{}, nil
+	}
+	return newMapIterator(snap, start, end, false), nil
 }
 
 func (m mockSnapshotReader) Snapshot(storeName string, version int64) (map[string][]byte, bool) {
@@ -27,6 +61,67 @@ func (m mockSnapshotReader) Snapshot(storeName string, version int64) (map[strin
 	}
 	return out, true
 }
+
+type emptyIterator struct{}
+
+func (emptyIterator) Domain() ([]byte, []byte) { return nil, nil }
+func (emptyIterator) Valid() bool              { return false }
+func (emptyIterator) Next()                    {}
+func (emptyIterator) Key() []byte              { panic("invalid iterator") }
+func (emptyIterator) Value() []byte            { panic("invalid iterator") }
+func (emptyIterator) Error() error             { return nil }
+func (emptyIterator) Close() error             { return nil }
+
+type mapIterator struct {
+	keys   [][]byte
+	values [][]byte
+	idx    int
+}
+
+func newMapIterator(snap map[string][]byte, start, end []byte, ascending bool) *mapIterator {
+	keys := make([]string, 0, len(snap))
+	for k := range snap {
+		if len(start) > 0 && k < string(start) {
+			continue
+		}
+		if len(end) > 0 && k >= string(end) {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	if !ascending {
+		for i, j := 0, len(keys)-1; i < j; i, j = i+1, j-1 {
+			keys[i], keys[j] = keys[j], keys[i]
+		}
+	}
+
+	keyBytes := make([][]byte, len(keys))
+	valBytes := make([][]byte, len(keys))
+	for i, k := range keys {
+		keyBytes[i] = []byte(k)
+		valBytes[i] = append([]byte(nil), snap[k]...)
+	}
+	return &mapIterator{keys: keyBytes, values: valBytes}
+}
+
+func (it *mapIterator) Domain() (start, end []byte) { return nil, nil }
+func (it *mapIterator) Valid() bool                 { return it.idx >= 0 && it.idx < len(it.keys) }
+func (it *mapIterator) Next()                       { it.idx++ }
+func (it *mapIterator) Key() []byte {
+	if !it.Valid() {
+		panic("invalid iterator")
+	}
+	return it.keys[it.idx]
+}
+func (it *mapIterator) Value() []byte {
+	if !it.Valid() {
+		panic("invalid iterator")
+	}
+	return it.values[it.idx]
+}
+func (it *mapIterator) Error() error { return nil }
+func (it *mapIterator) Close() error { return nil }
 
 func TestQuerySubspace(t *testing.T) {
 	reader := mockSnapshotReader{

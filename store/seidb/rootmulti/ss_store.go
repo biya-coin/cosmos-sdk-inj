@@ -2,6 +2,7 @@ package rootmulti
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 
 	dbm "github.com/cosmos/cosmos-db"
@@ -13,6 +14,10 @@ import (
 // sei-chain's scStore/ssStore split). M1 keeps behavior-compatible by allowing a
 // SC-backed adapter while wiring this interface through rootmulti.
 type StateStore interface {
+	Get(storeName string, version int64, key []byte) ([]byte, error)
+	Has(storeName string, version int64, key []byte) (bool, error)
+	Iterator(storeName string, version int64, start, end []byte) (types.Iterator, error)
+	ReverseIterator(storeName string, version int64, start, end []byte) (types.Iterator, error)
 	Snapshot(storeName string, version int64) (map[string][]byte, bool)
 	HasVersion(version int64) bool
 	EarliestVersion() int64
@@ -83,16 +88,26 @@ func newStateStoreFromConfig(db dbm.DB, cfg Config, scStore SCStore) StateStore 
 
 type noopStateStore struct{}
 
-func (noopStateStore) Snapshot(_ string, _ int64) (map[string][]byte, bool)                     { return nil, false }
-func (noopStateStore) HasVersion(_ int64) bool                                                   { return false }
-func (noopStateStore) EarliestVersion() int64                                                    { return 0 }
-func (noopStateStore) ApplyChangeSets(_ int64, _ []*NamedChangeSet) error                       { return nil }
-func (noopStateStore) SetLatestVersion(_ int64) error                                            { return nil }
-func (noopStateStore) RollbackToVersion(_ int64) error                                           { return nil }
-func (noopStateStore) SyncFromStores(_ map[types.StoreKey]types.CommitKVStore, _ int64) error   { return nil }
-func (noopStateStore) Close() error                                                              { return nil }
+func (noopStateStore) Get(_ string, _ int64, _ []byte) ([]byte, error)                              { return nil, nil }
+func (noopStateStore) Has(_ string, _ int64, _ []byte) (bool, error)                                { return false, nil }
+func (noopStateStore) Iterator(_ string, _ int64, _, _ []byte) (types.Iterator, error)              { return emptyIterator{}, nil }
+func (noopStateStore) ReverseIterator(_ string, _ int64, _, _ []byte) (types.Iterator, error)       { return emptyIterator{}, nil }
+func (noopStateStore) Snapshot(_ string, _ int64) (map[string][]byte, bool)                          { return nil, false }
+func (noopStateStore) HasVersion(_ int64) bool                                                        { return false }
+func (noopStateStore) EarliestVersion() int64                                                         { return 0 }
+func (noopStateStore) ApplyChangeSets(_ int64, _ []*NamedChangeSet) error                            { return nil }
+func (noopStateStore) SetLatestVersion(_ int64) error                                                 { return nil }
+func (noopStateStore) RollbackToVersion(_ int64) error                                                { return nil }
+func (noopStateStore) SyncFromStores(_ map[types.StoreKey]types.CommitKVStore, _ int64) error        { return nil }
+func (noopStateStore) Close() error                                                                   { return nil }
 
 type scBackedStateStore struct {
+	reader interface {
+		Get(storeName string, version int64, key []byte) ([]byte, error)
+		Has(storeName string, version int64, key []byte) (bool, error)
+		Iterator(storeName string, version int64, start, end []byte) (types.Iterator, error)
+		ReverseIterator(storeName string, version int64, start, end []byte) (types.Iterator, error)
+	}
 	snapshot interface {
 		Snapshot(storeName string, version int64) (map[string][]byte, bool)
 	}
@@ -110,6 +125,14 @@ type scBackedStateStore struct {
 
 func newSCBackedStateStore(scStore SCStore) StateStore {
 	adapter := &scBackedStateStore{}
+	if r, ok := scStore.(interface {
+		Get(storeName string, version int64, key []byte) ([]byte, error)
+		Has(storeName string, version int64, key []byte) (bool, error)
+		Iterator(storeName string, version int64, start, end []byte) (types.Iterator, error)
+		ReverseIterator(storeName string, version int64, start, end []byte) (types.Iterator, error)
+	}); ok {
+		adapter.reader = r
+	}
 	if s, ok := scStore.(interface {
 		Snapshot(storeName string, version int64) (map[string][]byte, bool)
 	}); ok {
@@ -132,6 +155,51 @@ func newSCBackedStateStore(scStore SCStore) StateStore {
 		adapter.syncer = s
 	}
 	return adapter
+}
+
+func (s *scBackedStateStore) Get(storeName string, version int64, key []byte) ([]byte, error) {
+	if s.reader == nil {
+		snap, ok := s.Snapshot(storeName, version)
+		if !ok {
+			return nil, nil
+		}
+		return cloneBytesNonNil(snap[string(key)]), nil
+	}
+	return s.reader.Get(storeName, version, key)
+}
+
+func (s *scBackedStateStore) Has(storeName string, version int64, key []byte) (bool, error) {
+	if s.reader == nil {
+		snap, ok := s.Snapshot(storeName, version)
+		if !ok {
+			return false, nil
+		}
+		_, found := snap[string(key)]
+		return found, nil
+	}
+	return s.reader.Has(storeName, version, key)
+}
+
+func (s *scBackedStateStore) Iterator(storeName string, version int64, start, end []byte) (types.Iterator, error) {
+	if s.reader == nil {
+		snap, ok := s.Snapshot(storeName, version)
+		if !ok {
+			return emptyIterator{}, nil
+		}
+		return newSnapshotIterator(snap, start, end, true), nil
+	}
+	return s.reader.Iterator(storeName, version, start, end)
+}
+
+func (s *scBackedStateStore) ReverseIterator(storeName string, version int64, start, end []byte) (types.Iterator, error) {
+	if s.reader == nil {
+		snap, ok := s.Snapshot(storeName, version)
+		if !ok {
+			return emptyIterator{}, nil
+		}
+		return newSnapshotIterator(snap, start, end, false), nil
+	}
+	return s.reader.ReverseIterator(storeName, version, start, end)
 }
 
 func (s *scBackedStateStore) Snapshot(storeName string, version int64) (map[string][]byte, bool) {
@@ -174,3 +242,64 @@ func (s *scBackedStateStore) SyncFromStores(stores map[types.StoreKey]types.Comm
 }
 
 func (s *scBackedStateStore) Close() error { return nil }
+
+type emptyIterator struct{}
+
+func (emptyIterator) Domain() ([]byte, []byte) { return nil, nil }
+func (emptyIterator) Valid() bool              { return false }
+func (emptyIterator) Next()                    {}
+func (emptyIterator) Key() []byte              { panic("invalid iterator") }
+func (emptyIterator) Value() []byte            { panic("invalid iterator") }
+func (emptyIterator) Error() error             { return nil }
+func (emptyIterator) Close() error             { return nil }
+
+type snapshotIterator struct {
+	keys   [][]byte
+	values [][]byte
+	idx    int
+}
+
+func newSnapshotIterator(snap map[string][]byte, start, end []byte, ascending bool) *snapshotIterator {
+	keys := make([]string, 0, len(snap))
+	for k := range snap {
+		if len(start) > 0 && k < string(start) {
+			continue
+		}
+		if len(end) > 0 && k >= string(end) {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	if !ascending {
+		for i, j := 0, len(keys)-1; i < j; i, j = i+1, j-1 {
+			keys[i], keys[j] = keys[j], keys[i]
+		}
+	}
+
+	keyBytes := make([][]byte, len(keys))
+	valBytes := make([][]byte, len(keys))
+	for i, k := range keys {
+		keyBytes[i] = []byte(k)
+		valBytes[i] = cloneBytesNonNil(snap[k])
+	}
+	return &snapshotIterator{keys: keyBytes, values: valBytes}
+}
+
+func (it *snapshotIterator) Domain() ([]byte, []byte) { return nil, nil }
+func (it *snapshotIterator) Valid() bool              { return it.idx >= 0 && it.idx < len(it.keys) }
+func (it *snapshotIterator) Next()                    { it.idx++ }
+func (it *snapshotIterator) Key() []byte {
+	if !it.Valid() {
+		panic("invalid iterator")
+	}
+	return it.keys[it.idx]
+}
+func (it *snapshotIterator) Value() []byte {
+	if !it.Valid() {
+		panic("invalid iterator")
+	}
+	return it.values[it.idx]
+}
+func (it *snapshotIterator) Error() error { return nil }
+func (it *snapshotIterator) Close() error { return nil }
