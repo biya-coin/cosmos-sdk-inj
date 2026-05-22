@@ -262,7 +262,7 @@ func recoverCompositeStateStore(changelogPath string, compositeStore *compositeS
 func replayCompositeWAL(changelogPath string, fromVersion int64, toVersion int64, handler func(entry scproto.ChangelogEntry) error) error {
 	streamHandler, err := scwal.NewChangelogWAL(changelogPath, scwal.Config{})
 	if err != nil {
-		return nil
+		return fmt.Errorf("failed to open WAL at %s: %w", changelogPath, err)
 	}
 	defer func() { _ = streamHandler.Close() }()
 

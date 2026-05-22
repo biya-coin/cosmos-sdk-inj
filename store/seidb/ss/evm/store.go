@@ -256,7 +256,13 @@ func (s *evmStateStore) RollbackToVersion(target int64) error {
 }
 
 func (s *evmStateStore) SyncFromStores(stores map[types.StoreKey]types.CommitKVStore, version int64) error {
-	evmStore := stores[types.NewKVStoreKey(EVMStoreKey)]
+	var evmStore types.CommitKVStore
+	for key, store := range stores {
+		if key != nil && key.Name() == EVMStoreKey {
+			evmStore = store
+			break
+		}
+	}
 	if evmStore == nil {
 		return nil
 	}
