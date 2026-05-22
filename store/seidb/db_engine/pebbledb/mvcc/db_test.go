@@ -1,6 +1,6 @@
 //go:build pebbledb
 
-package rootmulti
+package mvcc
 
 import (
 	"testing"
@@ -16,7 +16,7 @@ func TestPebbleStateStore_PersistAndReload(t *testing.T) {
 		KeepRecent: 0,
 	}
 
-	ss, err := newPebbleStateStore(cfg)
+	ss, err := NewStore(cfg)
 	require.NoError(t, err)
 	require.NoError(t, ss.ApplyChangeSets(1, []*NamedChangeSet{
 		{
@@ -45,7 +45,7 @@ func TestPebbleStateStore_PersistAndReload(t *testing.T) {
 	require.Equal(t, []byte("v1"), snap3["k"])
 	require.NoError(t, ss.Close())
 
-	reloaded, err := newPebbleStateStore(cfg)
+	reloaded, err := NewStore(cfg)
 	require.NoError(t, err)
 	require.True(t, reloaded.HasVersion(1))
 	require.True(t, reloaded.HasVersion(2))
@@ -64,7 +64,7 @@ func TestPebbleStateStore_KeepRecentPrunes(t *testing.T) {
 		KeepRecent: 2,
 	}
 
-	ss, err := newPebbleStateStore(cfg)
+	ss, err := NewStore(cfg)
 	require.NoError(t, err)
 	defer ss.Close()
 
@@ -92,7 +92,7 @@ func TestPebbleStateStore_Rollback(t *testing.T) {
 		KeepRecent: 0,
 	}
 
-	ss, err := newPebbleStateStore(cfg)
+	ss, err := NewStore(cfg)
 	require.NoError(t, err)
 	defer ss.Close()
 
@@ -123,7 +123,7 @@ func TestSSWALRecovery(t *testing.T) {
 	cfg := Config{Home: home, KeepRecent: 0}
 
 	// First run: commit v1..v3 then close cleanly.
-	ss, err := newPebbleStateStore(cfg)
+	ss, err := NewStore(cfg)
 	require.NoError(t, err)
 
 	values := map[int64][]byte{1: []byte("v1"), 2: []byte("v2"), 3: []byte("v3")}
@@ -140,7 +140,7 @@ func TestSSWALRecovery(t *testing.T) {
 	require.NoError(t, ss.Close())
 
 	// Simulate crash: reopen and verify WAL replay restores state.
-	reloaded, err := newPebbleStateStore(cfg)
+	reloaded, err := NewStore(cfg)
 	require.NoError(t, err)
 	defer reloaded.Close()
 
@@ -161,7 +161,7 @@ func TestSSWALRollback(t *testing.T) {
 	home := t.TempDir()
 	cfg := Config{Home: home, KeepRecent: 0}
 
-	ss, err := newPebbleStateStore(cfg)
+	ss, err := NewStore(cfg)
 	require.NoError(t, err)
 
 	for v := int64(1); v <= 5; v++ {
@@ -182,7 +182,7 @@ func TestSSWALRollback(t *testing.T) {
 	require.NoError(t, ss.Close())
 
 	// Reopen: WAL should be truncated at v3, so recovery must not replay v4/v5.
-	reloaded, err := newPebbleStateStore(cfg)
+	reloaded, err := NewStore(cfg)
 	require.NoError(t, err)
 	defer reloaded.Close()
 
@@ -199,7 +199,7 @@ func TestPebbleStateStore_MVCCGetAndDelete(t *testing.T) {
 	home := t.TempDir()
 	cfg := Config{Home: home, KeepRecent: 0}
 
-	raw, err := newPebbleStateStore(cfg)
+	raw, err := NewStore(cfg)
 	require.NoError(t, err)
 	ss := raw.(*pebbleStateStore)
 	defer ss.Close()
@@ -246,7 +246,7 @@ func TestPebbleStateStore_MVCCIterators(t *testing.T) {
 	home := t.TempDir()
 	cfg := Config{Home: home, KeepRecent: 0}
 
-	raw, err := newPebbleStateStore(cfg)
+	raw, err := NewStore(cfg)
 	require.NoError(t, err)
 	ss := raw.(*pebbleStateStore)
 	defer ss.Close()
@@ -311,7 +311,7 @@ func TestPebbleStateStore_AsyncApplyFlushesOnClose(t *testing.T) {
 		StateStoreAsyncWriteBuffer: 8,
 	}
 
-	raw, err := newPebbleStateStore(cfg)
+	raw, err := NewStore(cfg)
 	require.NoError(t, err)
 	ss := raw.(*pebbleStateStore)
 
@@ -328,7 +328,7 @@ func TestPebbleStateStore_AsyncApplyFlushesOnClose(t *testing.T) {
 
 	require.NoError(t, ss.Close())
 
-	reloadedRaw, err := newPebbleStateStore(cfg)
+	reloadedRaw, err := NewStore(cfg)
 	require.NoError(t, err)
 	reloaded := reloadedRaw.(*pebbleStateStore)
 	defer reloaded.Close()

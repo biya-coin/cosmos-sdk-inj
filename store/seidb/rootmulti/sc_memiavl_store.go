@@ -74,6 +74,10 @@ func (s *memIAVLStore) CurrentVersion() int64 {
 	return s.store.Version()
 }
 
+func (s *memIAVLStore) LatestVersion() int64 {
+	return s.CurrentVersion()
+}
+
 func (s *memIAVLStore) HasVersion(version int64) bool {
 	if version <= 0 {
 		return false

@@ -1,12 +1,15 @@
-package rootmulti
+package cosmos
 
-import "cosmossdk.io/store/types"
+import (
+	sstypes "cosmossdk.io/store/seidb/ss/types"
+	"cosmossdk.io/store/types"
+)
 
 type cosmosStateStore struct {
-	db StateStore
+	db sstypes.StateStore
 }
 
-func newCosmosStateStore(db StateStore) StateStore {
+func NewStateStore(db sstypes.StateStore) sstypes.StateStore {
 	return &cosmosStateStore{db: db}
 }
 
@@ -30,6 +33,10 @@ func (s *cosmosStateStore) Snapshot(storeName string, version int64) (map[string
 	return s.db.Snapshot(storeName, version)
 }
 
+func (s *cosmosStateStore) LatestVersion() int64 {
+	return s.db.LatestVersion()
+}
+
 func (s *cosmosStateStore) HasVersion(version int64) bool {
 	return s.db.HasVersion(version)
 }
@@ -38,7 +45,7 @@ func (s *cosmosStateStore) EarliestVersion() int64 {
 	return s.db.EarliestVersion()
 }
 
-func (s *cosmosStateStore) ApplyChangeSets(version int64, changeSets []*NamedChangeSet) error {
+func (s *cosmosStateStore) ApplyChangeSets(version int64, changeSets []*sstypes.NamedChangeSet) error {
 	return s.db.ApplyChangeSets(version, changeSets)
 }
 

@@ -1,4 +1,4 @@
-package rootmulti
+package evm
 
 import (
 	"fmt"
@@ -6,12 +6,14 @@ import (
 	"sync"
 
 	commonevm "cosmossdk.io/store/seidb/common/evm"
+	seidbcfg "cosmossdk.io/store/seidb/config"
+	"cosmossdk.io/store/seidb/db_engine/pebbledb/mvcc"
 	iavl "cosmossdk.io/store/seidb/sc/sei-iavl"
-	scproto "cosmossdk.io/store/seidb/sc/proto"
+	sstypes "cosmossdk.io/store/seidb/ss/types"
 	"cosmossdk.io/store/types"
 )
 
-const evmStoreKey = "evm"
+const EVMStoreKey = "evm"
 
 type evmStoreType uint8
 
@@ -25,20 +27,20 @@ const (
 )
 
 type evmStateStore struct {
-	subDBs      map[evmStoreType]StateStore
-	managedDBs  []StateStore
+	subDBs      map[evmStoreType]sstypes.StateStore
+	managedDBs  []sstypes.StateStore
 	dir         string
 	separateDBs bool
 }
 
-func newEVMStateStore(cfg Config) (*evmStateStore, error) {
+func NewStateStore(cfg seidbcfg.Config) (*evmStateStore, error) {
 	dir := cfg.StateStoreEVMDBDirectory
 	if dir == "" {
 		dir = filepath.Join(cfg.Home, "data", "evm_ss")
 	}
 
 	store := &evmStateStore{
-		subDBs:      make(map[evmStoreType]StateStore, 5),
+		subDBs:      make(map[evmStoreType]sstypes.StateStore, 5),
 		dir:         dir,
 		separateDBs: true,
 	}
@@ -46,7 +48,7 @@ func newEVMStateStore(cfg Config) (*evmStateStore, error) {
 	for _, storeType := range allEVMStoreTypes() {
 		subCfg := cfg
 		subCfg.Home = filepath.Join(dir, evmStoreTypeName(storeType))
-		db, err := newPebbleStateStore(subCfg)
+		db, err := mvcc.NewStore(subCfg)
 		if err != nil {
 			_ = store.Close()
 			return nil, fmt.Errorf("failed to open EVM MVCC DB for %s: %w", evmStoreTypeName(storeType), err)
@@ -102,7 +104,7 @@ func toEVMStoreType(kind commonevm.EVMKeyKind) evmStoreType {
 	}
 }
 
-func (s *evmStateStore) routeKey(key []byte) StateStore {
+func (s *evmStateStore) routeKey(key []byte) sstypes.StateStore {
 	kind, _ := commonevm.ParseEVMKey(key)
 	storeType := toEVMStoreType(kind)
 	if storeType == evmStoreEmpty {
@@ -116,7 +118,7 @@ func (s *evmStateStore) Get(_ string, version int64, key []byte) ([]byte, error)
 	if db == nil {
 		return nil, nil
 	}
-	return db.Get(evmStoreKey, version, key)
+	return db.Get(EVMStoreKey, version, key)
 }
 
 func (s *evmStateStore) Has(_ string, version int64, key []byte) (bool, error) {
@@ -124,7 +126,7 @@ func (s *evmStateStore) Has(_ string, version int64, key []byte) (bool, error) {
 	if db == nil {
 		return false, nil
 	}
-	return db.Has(evmStoreKey, version, key)
+	return db.Has(EVMStoreKey, version, key)
 }
 
 func (s *evmStateStore) Iterator(_ string, _ int64, _, _ []byte) (types.Iterator, error) {
@@ -162,7 +164,7 @@ func (s *evmStateStore) EarliestVersion() int64 {
 	return minVersion
 }
 
-func (s *evmStateStore) ApplyChangeSets(version int64, changeSets []*NamedChangeSet) error {
+func (s *evmStateStore) ApplyChangeSets(version int64, changeSets []*sstypes.NamedChangeSet) error {
 	grouped := s.groupBySubType(changeSets)
 	if len(grouped) == 0 {
 		return nil
@@ -170,10 +172,10 @@ func (s *evmStateStore) ApplyChangeSets(version int64, changeSets []*NamedChange
 	return s.applyGrouped(version, grouped)
 }
 
-func (s *evmStateStore) groupBySubType(changeSets []*NamedChangeSet) map[evmStoreType][]*iavl.KVPair {
+func (s *evmStateStore) groupBySubType(changeSets []*sstypes.NamedChangeSet) map[evmStoreType][]*iavl.KVPair {
 	grouped := make(map[evmStoreType][]*iavl.KVPair, len(s.subDBs))
 	for _, cs := range changeSets {
-		if cs == nil || cs.Name != evmStoreKey || cs.ChangeSet == nil {
+		if cs == nil || cs.Name != EVMStoreKey || cs.ChangeSet == nil {
 			continue
 		}
 		for _, kvPair := range cs.ChangeSet.Pairs {
@@ -226,9 +228,9 @@ func (s *evmStateStore) applyToSubDB(storeType evmStoreType, version int64, pair
 	if db == nil {
 		return nil
 	}
-	cs := []*NamedChangeSet{
+	cs := []*sstypes.NamedChangeSet{
 		{
-			Name:      evmStoreKey,
+			Name:      EVMStoreKey,
 			ChangeSet: &iavl.ChangeSet{Pairs: pairs},
 		},
 	}
@@ -254,7 +256,7 @@ func (s *evmStateStore) RollbackToVersion(target int64) error {
 }
 
 func (s *evmStateStore) SyncFromStores(stores map[types.StoreKey]types.CommitKVStore, version int64) error {
-	evmStore := stores[types.NewKVStoreKey(evmStoreKey)]
+	evmStore := stores[types.NewKVStoreKey(EVMStoreKey)]
 	if evmStore == nil {
 		return nil
 	}
@@ -282,7 +284,7 @@ func (s *evmStateStore) SyncFromStores(stores map[types.StoreKey]types.CommitKVS
 		if db == nil {
 			continue
 		}
-		cs := []*NamedChangeSet{{Name: evmStoreKey, ChangeSet: &iavl.ChangeSet{Pairs: pairs}}}
+		cs := []*sstypes.NamedChangeSet{{Name: EVMStoreKey, ChangeSet: &iavl.ChangeSet{Pairs: pairs}}}
 		if err := db.ApplyChangeSets(version, cs); err != nil {
 			return err
 		}
@@ -300,26 +302,40 @@ func (s *evmStateStore) Close() error {
 	return lastErr
 }
 
-func filterEVMNamedChangeSets(changeSets []*NamedChangeSet) []*NamedChangeSet {
-	filtered := make([]*NamedChangeSet, 0, len(changeSets))
+func FilterNamedChangeSets(changeSets []*sstypes.NamedChangeSet) []*sstypes.NamedChangeSet {
+	filtered := make([]*sstypes.NamedChangeSet, 0, len(changeSets))
 	for _, cs := range changeSets {
-		if cs != nil && cs.Name == evmStoreKey {
+		if cs != nil && cs.Name == EVMStoreKey {
 			filtered = append(filtered, cs)
 		}
 	}
 	return filtered
 }
 
-func stripEVMFromNamedChangeSets(changeSets []*NamedChangeSet) []*NamedChangeSet {
-	filtered := make([]*NamedChangeSet, 0, len(changeSets))
+func StripNamedChangeSets(changeSets []*sstypes.NamedChangeSet) []*sstypes.NamedChangeSet {
+	filtered := make([]*sstypes.NamedChangeSet, 0, len(changeSets))
 	for _, cs := range changeSets {
-		if cs != nil && cs.Name != evmStoreKey {
+		if cs != nil && cs.Name != EVMStoreKey {
 			filtered = append(filtered, cs)
 		}
 	}
 	return filtered
 }
 
-func toNamedChangeSets(protoSets []*scproto.NamedChangeSet) []*NamedChangeSet {
-	return fromProtoChangeSets(protoSets)
+func ToNamedChangeSets(protoSets []*sstypes.NamedChangeSet) []*sstypes.NamedChangeSet {
+	return protoSets
+}
+
+func (s *evmStateStore) LatestVersion() int64 {
+	var minVersion int64 = -1
+	for _, db := range s.managedDBs {
+		v := db.LatestVersion()
+		if minVersion < 0 || v < minVersion {
+			minVersion = v
+		}
+	}
+	if minVersion < 0 {
+		return 0
+	}
+	return minVersion
 }

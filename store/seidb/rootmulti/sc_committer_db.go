@@ -182,6 +182,10 @@ func (c *dbSCCommitter) CurrentVersion() int64 {
 	return c.version
 }
 
+func (c *dbSCCommitter) LatestVersion() int64 {
+	return c.CurrentVersion()
+}
+
 func (c *dbSCCommitter) RollbackToVersion(target int64) error {
 	c.mtx.Lock()
 	defer c.mtx.Unlock()

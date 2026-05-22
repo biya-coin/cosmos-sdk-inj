@@ -1,24 +1,26 @@
 //go:build pebbledb
 
-package rootmulti
+package composite
 
 import (
 	"testing"
 
 	commonevm "cosmossdk.io/store/seidb/common/evm"
+	seidbcfg "cosmossdk.io/store/seidb/config"
 	ciavl "cosmossdk.io/store/seidb/sc/sei-iavl"
+	sstypes "cosmossdk.io/store/seidb/ss/types"
 	"github.com/stretchr/testify/require"
 )
 
 func TestCompositeStateStore_CosmosOnly(t *testing.T) {
-	cfg := Config{
-		Home:               t.TempDir(),
-		StateStoreBackend:  "pebbledb",
+	cfg := seidbcfg.Config{
+		Home:                t.TempDir(),
+		StateStoreBackend:   "pebbledb",
 		StateStoreWriteMode: "cosmos_only",
 		StateStoreReadMode:  "cosmos_only",
 	}
 
-	raw, err := newCompositeStateStore(cfg)
+	raw, err := NewStateStore(cfg)
 	require.NoError(t, err)
 	ss := raw.(*compositeStateStore)
 	defer ss.Close()
@@ -27,7 +29,7 @@ func TestCompositeStateStore_CosmosOnly(t *testing.T) {
 }
 
 func TestCompositeStateStore_DualWriteEVM(t *testing.T) {
-	cfg := Config{
+	cfg := seidbcfg.Config{
 		Home:                        t.TempDir(),
 		StateStoreBackend:           "pebbledb",
 		StateStoreWriteMode:         "dual_write",
@@ -36,7 +38,7 @@ func TestCompositeStateStore_DualWriteEVM(t *testing.T) {
 		StateStoreEVMDBDirectory:    "",
 	}
 
-	raw, err := newCompositeStateStore(cfg)
+	raw, err := NewStateStore(cfg)
 	require.NoError(t, err)
 	ss := raw.(*compositeStateStore)
 	defer ss.Close()
@@ -44,7 +46,7 @@ func TestCompositeStateStore_DualWriteEVM(t *testing.T) {
 	storageKey := commonevm.BuildMemIAVLEVMKey(commonevm.EVMKeyStorage, append(make([]byte, 20), make([]byte, 32)...))
 	require.NotNil(t, storageKey)
 
-	changeSets := []*NamedChangeSet{
+	changeSets := []*sstypes.NamedChangeSet{
 		{
 			Name: "bank",
 			ChangeSet: &ciavl.ChangeSet{
@@ -71,7 +73,7 @@ func TestCompositeStateStore_DualWriteEVM(t *testing.T) {
 }
 
 func TestCompositeStateStore_SplitWriteRoutesEVMOutOfCosmos(t *testing.T) {
-	cfg := Config{
+	cfg := seidbcfg.Config{
 		Home:                       t.TempDir(),
 		StateStoreBackend:          "pebbledb",
 		StateStoreWriteMode:        "split_write",
@@ -79,7 +81,7 @@ func TestCompositeStateStore_SplitWriteRoutesEVMOutOfCosmos(t *testing.T) {
 		StateStoreAsyncWriteBuffer: 0,
 	}
 
-	raw, err := newCompositeStateStore(cfg)
+	raw, err := NewStateStore(cfg)
 	require.NoError(t, err)
 	ss := raw.(*compositeStateStore)
 	defer ss.Close()
@@ -87,7 +89,7 @@ func TestCompositeStateStore_SplitWriteRoutesEVMOutOfCosmos(t *testing.T) {
 	storageKey := commonevm.BuildMemIAVLEVMKey(commonevm.EVMKeyStorage, append(make([]byte, 20), make([]byte, 32)...))
 	require.NotNil(t, storageKey)
 
-	changeSets := []*NamedChangeSet{
+	changeSets := []*sstypes.NamedChangeSet{
 		{
 			Name: "bank",
 			ChangeSet: &ciavl.ChangeSet{

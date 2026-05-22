@@ -9,7 +9,9 @@ import (
 	"cosmossdk.io/log"
 	"cosmossdk.io/store/metrics"
 	"cosmossdk.io/store/seidb/commitment"
+	seidbss "cosmossdk.io/store/seidb/ss"
 	"cosmossdk.io/store/seidb/sc/memiavl"
+	sstypes "cosmossdk.io/store/seidb/ss/types"
 	"cosmossdk.io/store/types"
 	dbm "github.com/cosmos/cosmos-db"
 	"github.com/stretchr/testify/require"
@@ -32,8 +34,8 @@ func testMemIAVLConfig(t *testing.T) Config {
 func ensureTestStateStoreBackend(t *testing.T) string {
 	t.Helper()
 	registerStateStoreBackendOnce.Do(func() {
-		err := RegisterStateStoreBuilder(testStateStoreBackend, func(_ dbm.DB, _ Config, scStore SCStore) (StateStore, error) {
-			return newSCBackedStateStore(scStore), nil
+		err := seidbss.RegisterBuilder(testStateStoreBackend, func(_ dbm.DB, _ Config, scStore any) (sstypes.StateStore, error) {
+			return seidbss.NewSCBackedStateStore(scStore), nil
 		})
 		require.NoError(t, err)
 	})
@@ -139,6 +141,9 @@ func (s *rollbackTrackingStateStore) ReverseIterator(_ string, _ int64, _, _ []b
 func (s *rollbackTrackingStateStore) Snapshot(_ string, _ int64) (map[string][]byte, bool) {
 	return nil, false
 }
+func (s *rollbackTrackingStateStore) LatestVersion() int64 {
+	return 0
+}
 func (s *rollbackTrackingStateStore) HasVersion(_ int64) bool {
 	s.hasVersionCalled = true
 	return s.hasVersion
@@ -156,6 +161,16 @@ func (s *rollbackTrackingStateStore) SyncFromStores(_ map[types.StoreKey]types.C
 	return nil
 }
 func (s *rollbackTrackingStateStore) Close() error { return nil }
+
+type emptyIterator struct{}
+
+func (emptyIterator) Domain() ([]byte, []byte) { return nil, nil }
+func (emptyIterator) Valid() bool              { return false }
+func (emptyIterator) Next()                    {}
+func (emptyIterator) Key() []byte              { panic("invalid iterator") }
+func (emptyIterator) Value() []byte            { panic("invalid iterator") }
+func (emptyIterator) Error() error             { return nil }
+func (emptyIterator) Close() error             { return nil }
 
 func TestNewStore_ConfigRoundTrip(t *testing.T) {
 	db := dbm.NewMemDB()

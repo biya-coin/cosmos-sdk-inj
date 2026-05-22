@@ -1,4 +1,4 @@
-package rootmulti
+package mvcc
 
 import (
 	"bytes"
@@ -15,11 +15,17 @@ import (
 
 	"github.com/cockroachdb/pebble"
 
-	iavl "cosmossdk.io/store/seidb/sc/sei-iavl"
+	seidbcfg "cosmossdk.io/store/seidb/config"
 	scproto "cosmossdk.io/store/seidb/sc/proto"
 	scwal "cosmossdk.io/store/seidb/sc/wal"
+	sstypes "cosmossdk.io/store/seidb/ss/types"
+	ssutils "cosmossdk.io/store/seidb/ss/utils"
 	"cosmossdk.io/store/types"
 )
+
+type Config = seidbcfg.Config
+type StateStore = sstypes.StateStore
+type NamedChangeSet = sstypes.NamedChangeSet
 
 const (
 	ssVersionSize       = 8
@@ -60,7 +66,7 @@ type versionedChangeSets struct {
 	Done       chan struct{}
 }
 
-func newPebbleStateStore(cfg Config) (StateStore, error) {
+func NewStore(cfg Config) (StateStore, error) {
 	if cfg.Home == "" {
 		return nil, fmt.Errorf("seidb home must not be empty for pebbledb state store")
 	}
@@ -144,7 +150,7 @@ func (s *pebbleStateStore) Snapshot(storeName string, version int64) (map[string
 
 	out := make(map[string][]byte)
 	for ; itr.Valid(); itr.Next() {
-		out[string(itr.Key())] = cloneBytesNonNil(itr.Value())
+		out[string(itr.Key())] = ssutils.CloneBytesNonNil(itr.Value())
 	}
 	if err := itr.Error(); err != nil {
 		return nil, false
@@ -263,6 +269,10 @@ func (s *pebbleStateStore) EarliestVersion() int64 {
 	return s.earliestVersion.Load()
 }
 
+func (s *pebbleStateStore) LatestVersion() int64 {
+	return s.latestVersion.Load()
+}
+
 func (s *pebbleStateStore) ApplyChangeSets(version int64, changeSets []*NamedChangeSet) error {
 	s.mtx.Lock()
 	if err := s.validateNextVersionLocked(version); err != nil {
@@ -273,7 +283,7 @@ func (s *pebbleStateStore) ApplyChangeSets(version int64, changeSets []*NamedCha
 	if s.changelog != nil && len(changeSets) > 0 {
 		entry := scproto.ChangelogEntry{
 			Version:    version,
-			Changesets: toProtoChangeSets(changeSets),
+			Changesets: ssutils.ToProtoChangeSets(changeSets),
 		}
 		if err := s.changelog.Write(entry); err != nil {
 			s.mtx.Unlock()
@@ -284,7 +294,7 @@ func (s *pebbleStateStore) ApplyChangeSets(version int64, changeSets []*NamedCha
 	if s.config.StateStoreAsyncWriteBuffer > 0 {
 		s.pendingChanges <- versionedChangeSets{
 			Version:    version,
-			ChangeSets: cloneNamedChangeSets(changeSets),
+			ChangeSets: ssutils.CloneNamedChangeSets(changeSets),
 		}
 		s.mtx.Unlock()
 		return nil
@@ -551,7 +561,7 @@ func (s *pebbleStateStore) SyncFromStores(stores map[types.StoreKey]types.Commit
 	return s.resetWALLocked()
 }
 
-func (s *pebbleStateStore) ImportSnapshot(version int64, nodes <-chan SnapshotImportNode) error {
+func (s *pebbleStateStore) ImportSnapshot(version int64, nodes <-chan sstypes.SnapshotImportNode) error {
 	if version <= 0 {
 		return fmt.Errorf("invalid snapshot version: %d", version)
 	}
@@ -700,7 +710,7 @@ func (s *pebbleStateStore) recoverFromWAL() error {
 		if err := s.validateNextVersionLocked(entry.Version); err != nil {
 			return fmt.Errorf("ss wal replay: version check at %d: %w", entry.Version, err)
 		}
-		return s.applyChangeSetsNoWAL(entry.Version, fromProtoChangeSets(entry.Changesets))
+		return s.applyChangeSetsNoWAL(entry.Version, ssutils.FromProtoChangeSets(entry.Changesets))
 	})
 }
 
@@ -1475,32 +1485,4 @@ func (itr *mvccIterator) assertIsValid() {
 
 func (itr *mvccIterator) cursorTombstoned() bool {
 	return valTombstoned(itr.source.Value())
-}
-
-func fromProtoChangeSets(protoSets []*scproto.NamedChangeSet) []*NamedChangeSet {
-	if len(protoSets) == 0 {
-		return nil
-	}
-	out := make([]*NamedChangeSet, 0, len(protoSets))
-	for _, p := range protoSets {
-		if p == nil {
-			continue
-		}
-		pairs := make([]*iavl.KVPair, 0, len(p.Changeset.Pairs))
-		for _, pair := range p.Changeset.Pairs {
-			if pair == nil {
-				continue
-			}
-			pairs = append(pairs, &iavl.KVPair{
-				Key:    pair.Key,
-				Value:  pair.Value,
-				Delete: pair.Delete,
-			})
-		}
-		out = append(out, &NamedChangeSet{
-			Name:      p.Name,
-			ChangeSet: &iavl.ChangeSet{Pairs: pairs},
-		})
-	}
-	return out
 }

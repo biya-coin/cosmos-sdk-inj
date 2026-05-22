@@ -1,48 +1,55 @@
-package rootmulti
+package composite
 
 import (
 	"fmt"
 	"path/filepath"
 	"sync"
 
+	seidbcfg "cosmossdk.io/store/seidb/config"
+	"cosmossdk.io/store/seidb/db_engine/pebbledb/mvcc"
 	scproto "cosmossdk.io/store/seidb/sc/proto"
 	scwal "cosmossdk.io/store/seidb/sc/wal"
+	sscosmos "cosmossdk.io/store/seidb/ss/cosmos"
+	ssevm "cosmossdk.io/store/seidb/ss/evm"
+	sspruning "cosmossdk.io/store/seidb/ss/pruning"
+	sstypes "cosmossdk.io/store/seidb/ss/types"
+	ssutils "cosmossdk.io/store/seidb/ss/utils"
 	"cosmossdk.io/store/types"
 )
 
 type compositeStateStore struct {
-	cosmosStore    StateStore
-	evmStore       StateStore
-	pruningManager *stateStorePruningManager
-	writeMode      stateStoreWriteMode
-	readMode       stateStoreReadMode
+	cosmosStore    sstypes.StateStore
+	evmStore       sstypes.StateStore
+	pruningManager *sspruning.Manager
+	writeMode      seidbcfg.StateStoreWriteMode
+	readMode       seidbcfg.StateStoreReadMode
 	closeOnce      sync.Once
 	closeErr       error
 }
 
-func newCompositeStateStore(cfg Config) (StateStore, error) {
-	writeMode, err := parseWriteMode(cfg.StateStoreWriteMode)
+func NewStateStore(cfg seidbcfg.Config) (sstypes.StateStore, error) {
+	writeMode, err := seidbcfg.ParseWriteMode(cfg.StateStoreWriteMode)
 	if err != nil {
 		return nil, err
 	}
-	readMode, err := parseReadMode(cfg.StateStoreReadMode)
+	readMode, err := seidbcfg.ParseReadMode(cfg.StateStoreReadMode)
 	if err != nil {
 		return nil, err
 	}
 
-	cosmosDB, err := newPebbleStateStore(cfg)
+	cosmosDB, err := mvcc.NewStore(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cosmos MVCC DB: %w", err)
 	}
 
 	cs := &compositeStateStore{
-		cosmosStore: newCosmosStateStore(cosmosDB),
+		cosmosStore: sscosmos.NewStateStore(cosmosDB),
 		writeMode:   writeMode,
 		readMode:    readMode,
 	}
 
-	if writeMode != cosmosOnlyWrite || readMode != cosmosOnlyRead {
-		evmStore, err := newEVMStateStore(cfg)
+	if writeMode != seidbcfg.CosmosOnlyWrite || readMode != seidbcfg.CosmosOnlyRead {
+		evmStore, err := ssevm.NewStateStore(cfg)
 		if err != nil {
 			_ = cs.cosmosStore.Close()
 			return nil, fmt.Errorf("failed to create EVM store: %w", err)
@@ -56,11 +63,14 @@ func newCompositeStateStore(cfg Config) (StateStore, error) {
 		return nil, fmt.Errorf("failed to recover composite state store: %w", err)
 	}
 
-	if pruner, ok := cosmosDB.(*pebbleStateStore); ok {
-		cs.pruningManager = newStateStorePruningManager(
+	if pruner, ok := cosmosDB.(interface {
+		sstypes.StateStore
+		Prune(int64) error
+	}); ok {
+		cs.pruningManager = sspruning.NewPruningManager(
 			pruner,
 			pruner,
-			func() int64 { return pruner.latestVersion.Load() },
+			func() int64 { return pruner.LatestVersion() },
 			int64(cfg.KeepRecent),
 			600,
 		)
@@ -71,7 +81,7 @@ func newCompositeStateStore(cfg Config) (StateStore, error) {
 }
 
 func (s *compositeStateStore) Get(storeKey string, version int64, key []byte) ([]byte, error) {
-	if s.evmStore != nil && s.readMode != cosmosOnlyRead && storeKey == evmStoreKey {
+	if s.evmStore != nil && s.readMode != seidbcfg.CosmosOnlyRead && storeKey == ssevm.EVMStoreKey {
 		val, err := s.evmStore.Get(storeKey, version, key)
 		if err != nil {
 			return nil, err
@@ -79,7 +89,7 @@ func (s *compositeStateStore) Get(storeKey string, version int64, key []byte) ([
 		if val != nil {
 			return val, nil
 		}
-		if s.readMode == splitRead {
+		if s.readMode == seidbcfg.SplitRead {
 			return nil, nil
 		}
 	}
@@ -87,7 +97,7 @@ func (s *compositeStateStore) Get(storeKey string, version int64, key []byte) ([
 }
 
 func (s *compositeStateStore) Has(storeKey string, version int64, key []byte) (bool, error) {
-	if s.evmStore != nil && s.readMode != cosmosOnlyRead && storeKey == evmStoreKey {
+	if s.evmStore != nil && s.readMode != seidbcfg.CosmosOnlyRead && storeKey == ssevm.EVMStoreKey {
 		has, err := s.evmStore.Has(storeKey, version, key)
 		if err != nil {
 			return false, err
@@ -95,7 +105,7 @@ func (s *compositeStateStore) Has(storeKey string, version int64, key []byte) (b
 		if has {
 			return true, nil
 		}
-		if s.readMode == splitRead {
+		if s.readMode == seidbcfg.SplitRead {
 			return false, nil
 		}
 	}
@@ -114,6 +124,10 @@ func (s *compositeStateStore) Snapshot(storeKey string, version int64) (map[stri
 	return s.cosmosStore.Snapshot(storeKey, version)
 }
 
+func (s *compositeStateStore) LatestVersion() int64 {
+	return s.cosmosStore.LatestVersion()
+}
+
 func (s *compositeStateStore) HasVersion(version int64) bool {
 	return s.cosmosStore.HasVersion(version)
 }
@@ -122,15 +136,15 @@ func (s *compositeStateStore) EarliestVersion() int64 {
 	return s.cosmosStore.EarliestVersion()
 }
 
-func (s *compositeStateStore) ApplyChangeSets(version int64, changeSets []*NamedChangeSet) error {
-	if s.evmStore == nil || s.writeMode == cosmosOnlyWrite {
+func (s *compositeStateStore) ApplyChangeSets(version int64, changeSets []*sstypes.NamedChangeSet) error {
+	if s.evmStore == nil || s.writeMode == seidbcfg.CosmosOnlyWrite {
 		return s.cosmosStore.ApplyChangeSets(version, changeSets)
 	}
 
-	evmChangesets := filterEVMNamedChangeSets(changeSets)
+	evmChangesets := ssevm.FilterNamedChangeSets(changeSets)
 	cosmosChangesets := changeSets
-	if s.writeMode == splitWrite {
-		cosmosChangesets = stripEVMFromNamedChangeSets(changeSets)
+	if s.writeMode == seidbcfg.SplitWrite {
+		cosmosChangesets = ssevm.StripNamedChangeSets(changeSets)
 	}
 
 	if err := s.cosmosStore.ApplyChangeSets(version, cosmosChangesets); err != nil {
@@ -148,7 +162,7 @@ func (s *compositeStateStore) SetLatestVersion(version int64) error {
 	if err := s.cosmosStore.SetLatestVersion(version); err != nil {
 		return err
 	}
-	if s.evmStore != nil && s.writeMode != cosmosOnlyWrite {
+	if s.evmStore != nil && s.writeMode != seidbcfg.CosmosOnlyWrite {
 		if err := s.evmStore.SetLatestVersion(version); err != nil {
 			return err
 		}
@@ -169,7 +183,7 @@ func (s *compositeStateStore) RollbackToVersion(target int64) error {
 }
 
 func (s *compositeStateStore) SyncFromStores(stores map[types.StoreKey]types.CommitKVStore, version int64) error {
-	if s.evmStore == nil || s.writeMode == cosmosOnlyWrite {
+	if s.evmStore == nil || s.writeMode == seidbcfg.CosmosOnlyWrite {
 		return s.cosmosStore.SyncFromStores(stores, version)
 	}
 	if err := s.cosmosStore.SyncFromStores(stores, version); err != nil {
@@ -201,21 +215,12 @@ func recoverCompositeStateStore(changelogPath string, compositeStore *compositeS
 		if reader, ok := compositeStore.cosmosStore.(interface{ HasVersion(int64) bool }); ok {
 			_ = reader
 		}
-		if latestReader, ok := compositeStore.cosmosStore.(*cosmosStateStore); ok {
-			if ps, ok := latestReader.db.(*pebbleStateStore); ok {
-				cosmosVersion = ps.latestVersion.Load()
-			}
-		}
+		cosmosVersion = compositeStore.cosmosStore.LatestVersion()
 	}
 
 	var evmVersion int64
 	if compositeStore.evmStore != nil {
-		if evm, ok := compositeStore.evmStore.(*evmStateStore); ok {
-			evmVersion = evm.EarliestVersion()
-			if evmVersion == 0 {
-				evmVersion = cosmosVersion
-			}
-		}
+		evmVersion = compositeStore.evmStore.LatestVersion()
 	}
 
 	startVersion := cosmosVersion
@@ -224,11 +229,13 @@ func recoverCompositeStateStore(changelogPath string, compositeStore *compositeS
 	}
 
 	return replayCompositeWAL(changelogPath, startVersion, -1, func(entry scproto.ChangelogEntry) error {
-		changeSets := toNamedChangeSets(entry.Changesets)
+		changeSets := ssevm.FilterNamedChangeSets(ssevm.ToNamedChangeSets(ssutils.FromProtoChangeSets(entry.Changesets)))
+		_ = changeSets
 		if compositeStore.cosmosStore != nil && entry.Version > cosmosVersion {
-			cosmosChangesets := changeSets
-			if compositeStore.writeMode == splitWrite {
-				cosmosChangesets = stripEVMFromNamedChangeSets(changeSets)
+			allChangeSets := ssutils.FromProtoChangeSets(entry.Changesets)
+			cosmosChangesets := allChangeSets
+			if compositeStore.writeMode == seidbcfg.SplitWrite {
+				cosmosChangesets = ssevm.StripNamedChangeSets(allChangeSets)
 			}
 			if len(cosmosChangesets) > 0 {
 				if err := applyChangeSetsSyncToStore(compositeStore.cosmosStore, entry.Version, cosmosChangesets); err != nil {
@@ -239,7 +246,7 @@ func recoverCompositeStateStore(changelogPath string, compositeStore *compositeS
 			}
 		}
 		if compositeStore.evmStore != nil && entry.Version > evmVersion {
-			evmChangesets := filterEVMNamedChangeSets(changeSets)
+			evmChangesets := ssevm.FilterNamedChangeSets(ssutils.FromProtoChangeSets(entry.Changesets))
 			if len(evmChangesets) > 0 {
 				if err := applyChangeSetsSyncToStore(compositeStore.evmStore, entry.Version, evmChangesets); err != nil {
 					return fmt.Errorf("failed to apply evm changeset at version %d: %w", entry.Version, err)
@@ -274,7 +281,7 @@ func replayCompositeWAL(changelogPath string, fromVersion int64, toVersion int64
 	if lastEntry.Version <= fromVersion {
 		return nil
 	}
-	startOffset, err := findSSReplayStartOffset(streamHandler, firstOffset, lastOffset, fromVersion)
+	startOffset, err := findReplayStartOffset(streamHandler, firstOffset, lastOffset, fromVersion)
 	if err != nil {
 		return err
 	}
@@ -289,11 +296,34 @@ func replayCompositeWAL(changelogPath string, fromVersion int64, toVersion int64
 	})
 }
 
-func applyChangeSetsSyncToStore(store StateStore, version int64, changeSets []*NamedChangeSet) error {
+func applyChangeSetsSyncToStore(store sstypes.StateStore, version int64, changeSets []*sstypes.NamedChangeSet) error {
 	if syncer, ok := store.(interface {
-		ApplyChangeSetsSync(version int64, changeSets []*NamedChangeSet) error
+		ApplyChangeSetsSync(version int64, changeSets []*sstypes.NamedChangeSet) error
 	}); ok {
 		return syncer.ApplyChangeSetsSync(version, changeSets)
 	}
 	return store.ApplyChangeSets(version, changeSets)
+}
+
+func findReplayStartOffset(streamHandler scwal.ChangelogWAL, firstOffset, lastOffset uint64, targetVersion int64) (uint64, error) {
+	lo, hi := firstOffset, lastOffset
+	result := lastOffset + 1
+
+	for lo <= hi {
+		mid := lo + (hi-lo)/2
+		entry, err := streamHandler.ReadAt(mid)
+		if err != nil {
+			return 0, fmt.Errorf("failed to read WAL at offset %d: %w", mid, err)
+		}
+		if entry.Version > targetVersion {
+			result = mid
+			if mid == firstOffset {
+				break
+			}
+			hi = mid - 1
+		} else {
+			lo = mid + 1
+		}
+	}
+	return result, nil
 }

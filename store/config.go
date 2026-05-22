@@ -5,6 +5,7 @@ import (
 
 	"cosmossdk.io/log"
 	"cosmossdk.io/store/metrics"
+	seidbcfg "cosmossdk.io/store/seidb/config"
 	"cosmossdk.io/store/seidb/sc/memiavl"
 	"cosmossdk.io/store/types"
 )
@@ -27,33 +28,26 @@ type StoreConfig struct {
 type StoreBackendType string
 
 type SeiDBConfig struct {
-	Enabled                            bool
-	Home                               string
-	StateCommitmentBackend             string
-	StateStoreBackend                  string
-	StateStoreAsyncWriteBuffer         int
-	StateStoreWriteMode                string
-	StateStoreReadMode                 string
-	StateStoreEVMDBDirectory           string
-	KeepRecent                         uint64
-	HistoricalProofQueryMaxConcurrency uint32
-	MemIAVL                            memiavl.Config
+	Enabled bool
+	seidbcfg.Config
 }
 
 func DefaultStoreConfig() StoreConfig {
 	return StoreConfig{
 		Backend: StoreBackendIAVL,
 		SeiDB: SeiDBConfig{
-			Enabled:                            false,
-			StateCommitmentBackend:             "memiavl",
-			StateStoreBackend:                  "pebbledb",
-			StateStoreAsyncWriteBuffer:         100,
-			StateStoreWriteMode:                "cosmos_only",
-			StateStoreReadMode:                 "cosmos_only",
-			StateStoreEVMDBDirectory:           "",
-			KeepRecent:                         0,
-			HistoricalProofQueryMaxConcurrency: 0,
-			MemIAVL:                            memiavl.DefaultConfig(),
+			Enabled: false,
+			Config: seidbcfg.Config{
+				StateCommitmentBackend:             "memiavl",
+				StateStoreBackend:                  "pebbledb",
+				StateStoreAsyncWriteBuffer:         100,
+				StateStoreWriteMode:                "cosmos_only",
+				StateStoreReadMode:                 "cosmos_only",
+				StateStoreEVMDBDirectory:           "",
+				KeepRecent:                         0,
+				HistoricalProofQueryMaxConcurrency: 0,
+				MemIAVL:                            memiavl.DefaultConfig(),
+			},
 		},
 	}
 }

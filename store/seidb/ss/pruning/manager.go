@@ -1,4 +1,4 @@
-package rootmulti
+package pruning
 
 import (
 	"math/rand"
@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-type stateStorePruningManager struct {
+type Manager struct {
 	stateStore    interface{ HasVersion(int64) bool; EarliestVersion() int64 }
 	pruner        interface{ Prune(int64) error }
 	latestVersion func() int64
@@ -19,14 +19,14 @@ type stateStorePruningManager struct {
 	wg        sync.WaitGroup
 }
 
-func newStateStorePruningManager(
+func NewPruningManager(
 	stateStore interface{ HasVersion(int64) bool; EarliestVersion() int64 },
 	pruner interface{ Prune(int64) error },
 	latestVersion func() int64,
 	keepRecent int64,
 	pruneInterval int64,
-) *stateStorePruningManager {
-	return &stateStorePruningManager{
+) *Manager {
+	return &Manager{
 		stateStore:    stateStore,
 		pruner:        pruner,
 		latestVersion: latestVersion,
@@ -36,7 +36,7 @@ func newStateStorePruningManager(
 	}
 }
 
-func (m *stateStorePruningManager) Start() {
+func (m *Manager) Start() {
 	if m.keepRecent <= 0 || m.pruneInterval <= 0 || m.pruner == nil || m.latestVersion == nil {
 		return
 	}
@@ -46,14 +46,14 @@ func (m *stateStorePruningManager) Start() {
 	})
 }
 
-func (m *stateStorePruningManager) Stop() {
+func (m *Manager) Stop() {
 	m.stopOnce.Do(func() {
 		close(m.stopCh)
 	})
 	m.wg.Wait()
 }
 
-func (m *stateStorePruningManager) pruneLoop() {
+func (m *Manager) pruneLoop() {
 	defer m.wg.Done()
 
 	for {
