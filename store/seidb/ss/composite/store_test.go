@@ -118,3 +118,20 @@ func TestCompositeStateStore_SplitWriteRoutesEVMOutOfCosmos(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []byte("evm-v1"), readVal)
 }
+
+func TestCompositeStateStore_EmptyWALIsTreatedAsCleanStart(t *testing.T) {
+	cfg := seidbcfg.Config{
+		Home:                t.TempDir(),
+		StateStoreBackend:   "pebbledb",
+		StateStoreWriteMode: "cosmos_only",
+		StateStoreReadMode:  "cosmos_only",
+	}
+
+	raw, err := NewStateStore(cfg)
+	require.NoError(t, err)
+	ss := raw.(*compositeStateStore)
+	defer ss.Close()
+
+	require.Equal(t, int64(0), ss.LatestVersion())
+	require.Equal(t, int64(0), ss.EarliestVersion())
+}
