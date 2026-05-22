@@ -302,3 +302,38 @@ func TestPebbleStateStore_MVCCIterators(t *testing.T) {
 	require.Equal(t, []string{"c", "b", "a"}, keys)
 	require.Equal(t, []string{"3", "2", "1x"}, vals)
 }
+
+func TestPebbleStateStore_AsyncApplyFlushesOnClose(t *testing.T) {
+	home := t.TempDir()
+	cfg := Config{
+		Home:                       home,
+		KeepRecent:                 0,
+		StateStoreAsyncWriteBuffer: 8,
+	}
+
+	raw, err := newPebbleStateStore(cfg)
+	require.NoError(t, err)
+	ss := raw.(*pebbleStateStore)
+
+	for v := int64(1); v <= 3; v++ {
+		require.NoError(t, ss.ApplyChangeSets(v, []*NamedChangeSet{
+			{
+				Name: "bank",
+				ChangeSet: &ciavl.ChangeSet{
+					Pairs: []*ciavl.KVPair{{Key: []byte("k"), Value: []byte{byte('0' + v)}}},
+				},
+			},
+		}))
+	}
+
+	require.NoError(t, ss.Close())
+
+	reloadedRaw, err := newPebbleStateStore(cfg)
+	require.NoError(t, err)
+	reloaded := reloadedRaw.(*pebbleStateStore)
+	defer reloaded.Close()
+
+	val, err := reloaded.Get("bank", 3, []byte("k"))
+	require.NoError(t, err)
+	require.Equal(t, []byte("3"), val)
+}

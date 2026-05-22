@@ -596,6 +596,10 @@ func GetStoreConfig(appOpts types.AppOptions) store.StoreConfig {
 		cfg.SeiDB.StateCommitmentBackend = scBackend
 	}
 	cfg.SeiDB.StateStoreBackend = cast.ToString(appOpts.Get(FlagSeiDBSSBackend))
+	cfg.SeiDB.StateStoreAsyncWriteBuffer = cast.ToInt(appOpts.Get(FlagSeiDBSSAsyncWriteBuffer))
+	cfg.SeiDB.StateStoreWriteMode = cast.ToString(appOpts.Get(FlagSeiDBSSWriteMode))
+	cfg.SeiDB.StateStoreReadMode = cast.ToString(appOpts.Get(FlagSeiDBSSReadMode))
+	cfg.SeiDB.StateStoreEVMDBDirectory = cast.ToString(appOpts.Get(FlagSeiDBSSEVMDBDirectory))
 	cfg.SeiDB.KeepRecent = cast.ToUint64(appOpts.Get(FlagSeiDBKeepRecent))
 	cfg.SeiDB.HistoricalProofQueryMaxConcurrency = cast.ToUint32(appOpts.Get(FlagSeiDBHistoricalProofMaxConcurrency))
 

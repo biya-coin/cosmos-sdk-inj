@@ -82,6 +82,10 @@ const (
 		FlagSeiDBHome           = "seidb.home"
 		FlagSeiDBSCBackend      = "seidb.sc-backend"
 		FlagSeiDBSSBackend      = "seidb.ss-backend"
+		FlagSeiDBSSAsyncWriteBuffer = "seidb.ss-async-write-buffer"
+		FlagSeiDBSSWriteMode    = "seidb.ss-write-mode"
+		FlagSeiDBSSReadMode     = "seidb.ss-read-mode"
+		FlagSeiDBSSEVMDBDirectory = "seidb.ssevm-db-directory"
 		FlagSeiDBKeepRecent     = "seidb.keep-recent"
 		FlagSeiDBHistoricalProofMaxConcurrency = "seidb.historical-proof-max-concurrency"
 		FlagShutdownGrace       = "shutdown-grace"
@@ -1049,6 +1053,10 @@ func addStartNodeFlags(cmd *cobra.Command, opts StartCmdOptions) {
 		cmd.Flags().String(FlagSeiDBHome, "", "Home directory for SeiDB state")
 		cmd.Flags().String(FlagSeiDBSCBackend, "memiavl", "SeiDB state commitment backend")
 		cmd.Flags().String(FlagSeiDBSSBackend, "pebbledb", "SeiDB state store backend")
+		cmd.Flags().Int(FlagSeiDBSSAsyncWriteBuffer, 100, "SeiDB SS async write buffer size (<=0 means sync write)")
+		cmd.Flags().String(FlagSeiDBSSWriteMode, "cosmos_only", "SeiDB SS write mode (cosmos_only|dual_write|split_write)")
+		cmd.Flags().String(FlagSeiDBSSReadMode, "cosmos_only", "SeiDB SS read mode (cosmos_only|evm_first|split_read)")
+		cmd.Flags().String(FlagSeiDBSSEVMDBDirectory, "", "SeiDB SS EVM DB directory override")
 		cmd.Flags().Uint64(FlagSeiDBKeepRecent, 0, "SeiDB keep-recent setting for historical state")
 		cmd.Flags().Uint32(FlagSeiDBHistoricalProofMaxConcurrency, 0, "Max concurrent historical proof queries for SeiDB (0 disables limit)")
 		AddMemIAVLFlags(cmd.Flags())

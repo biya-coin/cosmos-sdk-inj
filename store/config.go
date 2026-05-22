@@ -31,6 +31,10 @@ type SeiDBConfig struct {
 	Home                               string
 	StateCommitmentBackend             string
 	StateStoreBackend                  string
+	StateStoreAsyncWriteBuffer         int
+	StateStoreWriteMode                string
+	StateStoreReadMode                 string
+	StateStoreEVMDBDirectory           string
 	KeepRecent                         uint64
 	HistoricalProofQueryMaxConcurrency uint32
 	MemIAVL                            memiavl.Config
@@ -43,6 +47,10 @@ func DefaultStoreConfig() StoreConfig {
 			Enabled:                            false,
 			StateCommitmentBackend:             "memiavl",
 			StateStoreBackend:                  "pebbledb",
+			StateStoreAsyncWriteBuffer:         100,
+			StateStoreWriteMode:                "cosmos_only",
+			StateStoreReadMode:                 "cosmos_only",
+			StateStoreEVMDBDirectory:           "",
 			KeepRecent:                         0,
 			HistoricalProofQueryMaxConcurrency: 0,
 			MemIAVL:                            memiavl.DefaultConfig(),
@@ -74,4 +82,3 @@ func (c StoreConfig) NewCommitMultiStore(db dbm.DB, logger log.Logger, metricGat
 		return NewIAVLCommitMultiStore(db, logger, metricGatherer)
 	}
 }
-

@@ -43,12 +43,21 @@ type pebbleStateStore struct {
 	storage *pebble.DB
 	config  Config
 
+	asyncWriteWG  sync.WaitGroup
+	pendingChanges chan versionedChangeSets
+
 	earliestVersion atomic.Int64
 	latestVersion   atomic.Int64
 	storeKeyDirty   sync.Map
 
 	changelog    scwal.ChangelogWAL
 	changelogDir string
+}
+
+type versionedChangeSets struct {
+	Version    int64
+	ChangeSets []*NamedChangeSet
+	Done       chan struct{}
 }
 
 func newPebbleStateStore(cfg Config) (StateStore, error) {
@@ -80,8 +89,9 @@ func newPebbleStateStore(cfg Config) (StateStore, error) {
 	}
 
 	store := &pebbleStateStore{
-		storage: db,
-		config:  cfg,
+		storage:        db,
+		config:         cfg,
+		pendingChanges: make(chan versionedChangeSets, maxInt(cfg.StateStoreAsyncWriteBuffer, 1)),
 	}
 	store.earliestVersion.Store(earliestVersion)
 	store.latestVersion.Store(latestVersion)
@@ -108,6 +118,11 @@ func newPebbleStateStore(cfg Config) (StateStore, error) {
 		}
 		_ = db.Close()
 		return nil, fmt.Errorf("ss wal recovery failed: %w", err)
+	}
+
+	if cfg.StateStoreAsyncWriteBuffer > 0 {
+		store.asyncWriteWG.Add(1)
+		go store.writeAsyncInBackground()
 	}
 
 	return store, nil
@@ -250,9 +265,8 @@ func (s *pebbleStateStore) EarliestVersion() int64 {
 
 func (s *pebbleStateStore) ApplyChangeSets(version int64, changeSets []*NamedChangeSet) error {
 	s.mtx.Lock()
-	defer s.mtx.Unlock()
-
 	if err := s.validateNextVersionLocked(version); err != nil {
+		s.mtx.Unlock()
 		return err
 	}
 
@@ -262,10 +276,30 @@ func (s *pebbleStateStore) ApplyChangeSets(version int64, changeSets []*NamedCha
 			Changesets: toProtoChangeSets(changeSets),
 		}
 		if err := s.changelog.Write(entry); err != nil {
+			s.mtx.Unlock()
 			return fmt.Errorf("ss wal write at version %d: %w", version, err)
 		}
 	}
 
+	if s.config.StateStoreAsyncWriteBuffer > 0 {
+		s.pendingChanges <- versionedChangeSets{
+			Version:    version,
+			ChangeSets: cloneNamedChangeSets(changeSets),
+		}
+		s.mtx.Unlock()
+		return nil
+	}
+	defer s.mtx.Unlock()
+	return s.applyChangeSetsNoWAL(version, changeSets)
+}
+
+func (s *pebbleStateStore) ApplyChangeSetsSync(version int64, changeSets []*NamedChangeSet) error {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+
+	if err := s.validateNextVersionLocked(version); err != nil {
+		return err
+	}
 	return s.applyChangeSetsNoWAL(version, changeSets)
 }
 
@@ -577,6 +611,14 @@ func (s *pebbleStateStore) Close() error {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
 
+	if s.pendingChanges != nil {
+		close(s.pendingChanges)
+		s.mtx.Unlock()
+		s.asyncWriteWG.Wait()
+		s.mtx.Lock()
+		s.pendingChanges = nil
+	}
+
 	if s.changelog != nil {
 		_ = s.changelog.Close()
 		s.changelog = nil
@@ -587,6 +629,31 @@ func (s *pebbleStateStore) Close() error {
 	err := s.storage.Close()
 	s.storage = nil
 	return err
+}
+
+func (s *pebbleStateStore) writeAsyncInBackground() {
+	defer s.asyncWriteWG.Done()
+	for nextChange := range s.pendingChanges {
+		if nextChange.Done != nil {
+			close(nextChange.Done)
+			continue
+		}
+		s.mtx.Lock()
+		if err := s.applyChangeSetsNoWAL(nextChange.Version, nextChange.ChangeSets); err != nil {
+			s.mtx.Unlock()
+			panic(err)
+		}
+		s.mtx.Unlock()
+	}
+}
+
+func (s *pebbleStateStore) WaitForPendingWrites() {
+	if s.config.StateStoreAsyncWriteBuffer <= 0 {
+		return
+	}
+	done := make(chan struct{})
+	s.pendingChanges <- versionedChangeSets{Done: done}
+	<-done
 }
 
 func (s *pebbleStateStore) recoverFromWAL() error {
@@ -685,6 +752,16 @@ func (s *pebbleStateStore) pruneOldVersionsLocked() error {
 	}
 	s.earliestVersion.Store(pruneTo + 1)
 	return writeSSVersionMetadata(s.storage, ssEarliestVersionKey, pruneTo+1)
+}
+
+func (s *pebbleStateStore) Prune(version int64) error {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+	if err := s.pruneLocked(version); err != nil {
+		return err
+	}
+	s.earliestVersion.Store(version + 1)
+	return writeSSVersionMetadata(s.storage, ssEarliestVersionKey, version+1)
 }
 
 func (s *pebbleStateStore) pruneLocked(version int64) error {
@@ -1159,6 +1236,13 @@ func decodeUint64Ascending(b []byte) (int64, error) {
 func valTombstoned(val []byte) bool {
 	_, tombBz, ok := splitMVCCKey(val)
 	return ok && len(tombBz) > 0
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 type mvccIterator struct {

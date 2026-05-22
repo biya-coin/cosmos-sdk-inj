@@ -44,7 +44,7 @@ var (
 	ssBuilderMu sync.RWMutex
 	ssBuilders  = map[string]ssStoreBuilder{
 		"pebbledb": func(_ dbm.DB, cfg Config, _ SCStore) (StateStore, error) {
-			return newPebbleStateStore(cfg)
+			return newCompositeStateStore(cfg)
 		},
 	}
 )
