@@ -23,6 +23,10 @@ func newSeiDBSkeletonStore(db dbm.DB, logger log.Logger, metricGatherer metrics.
 			Home:                               normalized.SeiDB.Home,
 			StateCommitmentBackend:             normalized.SeiDB.StateCommitmentBackend,
 			StateStoreBackend:                  normalized.SeiDB.StateStoreBackend,
+			StateStoreAsyncWriteBuffer:         normalized.SeiDB.StateStoreAsyncWriteBuffer,
+			StateStoreWriteMode:                normalized.SeiDB.StateStoreWriteMode,
+			StateStoreReadMode:                 normalized.SeiDB.StateStoreReadMode,
+			StateStoreEVMDBDirectory:           normalized.SeiDB.StateStoreEVMDBDirectory,
 			KeepRecent:                         normalized.SeiDB.KeepRecent,
 			HistoricalProofQueryMaxConcurrency: normalized.SeiDB.HistoricalProofQueryMaxConcurrency,
 			MemIAVL:                            normalized.SeiDB.MemIAVL,
@@ -42,4 +46,3 @@ func (s *seiDBSkeletonStore) Query(req *types.RequestQuery) (*types.ResponseQuer
 	}
 	return queryable.Query(req)
 }
-

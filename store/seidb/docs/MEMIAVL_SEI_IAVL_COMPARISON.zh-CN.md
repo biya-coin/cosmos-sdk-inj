@@ -1,6 +1,6 @@
 # MemIAVL / sei-iavl：Sei-Chain 与 cosmos-sdk-inj SeiDB 对比
 
-> 生成日期：2026-05-21  
+> 更新日期：2026-05-22  
 > 对比范围：  
 > - **Sei**：`sei-chain/sei-db/state_db/sc/memiavl` + `sei-chain/sei-iavl`  
 > - **Injective 移植**：`cosmos-sdk-inj/store/seidb/sc/memiavl` + `cosmos-sdk-inj/store/seidb/sc/sei-iavl`
@@ -14,10 +14,10 @@
 | **MemIAVL 核心算法** | ✅ 基本一致 | `PersistedNode` / `MemNode`、快照 mmap、WAL changelog、后台 `rewriteSnapshot`、CoW `ApplyChangeSet` 等逻辑与 Sei 同源拷贝，非测试 `.go` 仅 import 与少量适配差异 |
 | **sei-iavl 树实现** | ✅ 基本一致 | 自 `sei-chain/sei-iavl` rsync 至 `sc/sei-iavl`，变更主要为模块路径与 Cosmos/CometBFT 依赖替换 |
 | **SC 上层集成** | ⚠️ 部分一致 | Injective 仅接 **memiavl** SC；Sei 另有 **composite + flatkv**（EVM） |
-| **应用接线** | ⚠️ 不同 | Sei 走 `storev2` + `[state-commit]`；Injective 走 `seidb/rootmulti` + `[memiavl]`，且 **Phase A** 仍保留 runtime `github.com/cosmos/iavl` |
+| **应用接线** | ⚠️ 不同 | Sei 走 `storev2` + `state_db/{sc,ss,db_engine}`；Injective 走 `seidb/rootmulti` 编排层 + `seidb/{sc,ss,db_engine}`，且 **历史 proof / runtime 元数据** 仍保留部分 legacy `github.com/cosmos/iavl` 路径 |
 | **配置** | ⚠️ 超集 | Injective `memiavl.Config` 增加 `enable` / `zero-copy` / `cache-size` 及 app.toml 接线；`cache-size` 尚未落到树逻辑 |
 
-**一句话**：SC 内的 **memiavl + sei-iavl 内核与 Sei 对齐**；差异集中在 **依赖路径、证明库、配置与 rootmulti 集成广度**。
+**一句话**：SC 内的 **memiavl + sei-iavl 内核与 Sei 对齐**；当前差异主要集中在 **SC 功能广度（无 flatkv SC）** 与 **SDK 侧编排/历史证明接线**，而 `store/seidb` 目录层次已基本对齐 `sei-db` 的 `sc / ss / db_engine` 形态。
 
 ---
 
@@ -32,6 +32,19 @@
 | `sei-db/proto/`（changelog 等） | `store/seidb/sc/proto/` | 拆到 `sc/proto` |
 | `sei-db/wal/` | `store/seidb/sc/wal/` | 拆到 `sc/wal` |
 | `sei-iavl` | `store/seidb/sc/sei-iavl` | 见下节 |
+
+### 2.1.1 SS / DB Engine 目录对齐（已完成）
+
+| Sei 路径 | cosmos-sdk-inj 路径 | 关系 |
+|----------|---------------------|------|
+| `sei-db/state_db/ss/composite/` | `store/seidb/ss/composite/` | 结构对齐 |
+| `sei-db/state_db/ss/cosmos/` | `store/seidb/ss/cosmos/` | 结构对齐 |
+| `sei-db/state_db/ss/evm/` | `store/seidb/ss/evm/` | 结构对齐 |
+| `sei-db/state_db/ss/pruning/` | `store/seidb/ss/pruning/` | 结构对齐 |
+| `sei-db/state_db/ss/store.go` | `store/seidb/ss/manager.go` | SS 入口 / builder |
+| `sei-db/db_engine/pebbledb/mvcc/` | `store/seidb/db_engine/pebbledb/mvcc/` | 结构对齐 |
+| `sei-db/common/evm/` | `store/seidb/common/evm/` | 结构对齐 |
+| `sei-db/config/*` | `store/seidb/config/*` | 共享配置层 |
 
 **仅 Sei 存在（Injective 未移植）**
 
@@ -93,10 +106,10 @@ flowchart TB
 flowchart TB
     subgraph app [cosmos-sdk-inj]
         SKEL[store/seidb_skeleton → rootmulti.Store]
-        RT[storev2Runtime Phase A]
+        RT[storev2Runtime legacy metadata]
     end
     subgraph sc [State Commit]
-        REG[sc_store sync.Map memiavl]
+        REG[sc_store memiavl builder]
         MEM[memiavl.CommitStore]
     end
     subgraph tree [Tree layer]
@@ -104,20 +117,27 @@ flowchart TB
         PN[PersistedNode / MemNode]
     end
     subgraph ss [State Store]
-        SS[pebbledb / memory SS]
+        SSMGR[ss/manager]
+        SSCOMP[ss/composite]
+        SSCOS[ss/cosmos]
+        SSEVM[ss/evm]
+        MVCC[db_engine/pebbledb/mvcc]
     end
     SKEL --> REG --> MEM
     MEM --> PN
     MEM --> SEIIAVL
     SKEL --> RT
     RT --> COSMOS[github.com/cosmos/iavl runtime IAVL]
-    SKEL --> SS
+    SKEL --> SSMGR --> SSCOMP
+    SSCOMP --> SSCOS --> MVCC
+    SSCOMP --> SSEVM --> MVCC
 ```
 
 - **SC 读**：`commitment.Store` → `memiavl.Tree`（mmap + MemNode）。  
 - **SC 写**：块末 changeset → `memIAVLStore.ApplyChangeSets` → `Commit`。  
-- **AppHash / 快照导出（Phase A）**：仍部分依赖 **runtime IAVL**（`storev2_runtime.go` 使用 `github.com/cosmos/iavl`）。  
-- **无** `composite` / `flatkv`。
+- **SS**：已拆成 `ss/composite`、`ss/cosmos`、`ss/evm`、`ss/pruning`，底层为 `db_engine/pebbledb/mvcc`。  
+- **AppHash / 历史 proof / 部分元数据路径**：仍保留 legacy runtime IAVL 参与（见 §6、§9.3）。  
+- **仍无** `SC flatkv` / `SC composite`。
 
 ---
 
@@ -170,23 +190,29 @@ flowchart TB
 
 ---
 
-## 6. SeiDB 集成层差异（rootmulti / commitment）
+## 6. SeiDB 集成层差异（rootmulti / commitment / ss）
 
-| 能力 | Sei `storev2` | cosmos-sdk-inj `seidb/rootmulti` |
+| 能力 | Sei `storev2` / `sei-db` | cosmos-sdk-inj `seidb/rootmulti` |
 |------|---------------|----------------------------------|
 | SC 构造 | `composite.NewCompositeCommitStore` 或直连 memiavl | `RegisterSCStoreBuilder("memiavl")` → `memIAVLStore` |
 | EVM SC | flatkv + WriteMode/ReadMode | ❌ 未实现 |
+| SS 构造 | `state_db/ss/composite` + `db_engine/pebbledb/mvcc` | `ss/manager` + `ss/composite` + `db_engine/pebbledb/mvcc` |
+| SS 写模型 | WAL → async queue → background MVCC write | ✅ 已实现同类 async pipeline |
+| SS 读模型 | `cosmos/evm/composite` 路由 | ✅ 已实现同类目录与路由 |
 | Deliver KV | `commitment.Store` + memiavl Tree | 同左（已接 sei-iavl ChangeSet） |
-| 历史证明 | SC 快照 + SS | SS + Phase A runtime 回退 |
+| 历史证明 | SC 快照 + SS | SS 历史读已对齐；proof 仍部分回退 runtime |
 | InterBlockCache | storev2 对 memiavl 多为 noop | 仍可对 runtime IAVL 生效 |
-| AppHash 来源 | 以 SC `CommitInfo` 为主 | **部分**仍读 runtime `WorkingHash` |
+| AppHash 来源 | 以 SC `CommitInfo` 为主 | ✅ memiavl 激活时已切 SC；legacy metadata 仍存在 |
 
 关键 Injective 文件：
 
 - `rootmulti/sc_store.go` — SC 注册表  
 - `rootmulti/sc_memiavl_store.go` — `CommitStore` 包装  
 - `commitment/store.go` — Deliver 只写 changeset  
-- `rootmulti/storev2_runtime.go` — Phase A legacy IAVL（**非** sei-iavl）
+- `ss/manager.go` — SS 统一入口  
+- `ss/composite/store.go` — SS 组合路由  
+- `db_engine/pebbledb/mvcc/db.go` — SS MVCC 引擎  
+- `rootmulti/storev2_runtime.go` — legacy metadata / historical proof fallback
 
 ---
 
@@ -249,10 +275,13 @@ Commit:   changeSets → memiavl.MultiTree.ApplyChangeSets → SaveVersion (CoW)
           → WAL changelog → 可选 async buffer
           → 每 N 块 snapshot rewrite → MemNode 泄压
 
-SS:       同版本 changeset → pebbledb ApplyChangeSets（与 SC 并行，不参与 Merkle）
+SS:       同版本 changeset → ss/composite → ss/cosmos|ss/evm
+          → db_engine/pebbledb/mvcc ApplyChangeSets
+          → WAL + async queue + background MVCC write（与 SC 并行，不参与 Merkle）
 ```
 
-Injective 与上述 **SC 路径一致**；差异在 **AppHash 是否完全切到 SC** 以及 **runtime 仍保留 cosmos/iavl**。
+Injective 与上述 **SC 路径一致**；SS 目录层次与主数据流也已基本对齐。  
+当前主要差异在 **SC 无 flatkv/composite**、以及 **历史 proof / 部分元数据仍保留 runtime cosmos/iavl fallback**。
 
 ---
 
@@ -288,7 +317,7 @@ Commit：`memiavl.MultiTree.ApplyChangeSets` → `Tree.SaveVersion` → 在修�
 | `Load*` / `Rollback` | `LoadVersionForSCBackedCommit`：元数据按 SC 高度加载，legacy IAVL 树保持 v0 占位 |
 | 无 `Home` 的 noop SC | 回退 Phase A：`runtime.Commit()` 决定 AppHash |
 
-仍与 Sei 不同：历史证明部分高度仍走 `runtime.Query`；无 EVM composite/flatkv。
+仍与 Sei 不同：历史证明部分高度仍走 `runtime.Query`；无 SC flatkv/composite。
 
 ---
 
@@ -300,7 +329,7 @@ Commit：`memiavl.MultiTree.ApplyChangeSets` → `Tree.SaveVersion` → 在修�
 | P1 | `cache-size` 实现或文档标注废弃 | 与 Sei `sc-cache-size` 同理，需 LRU 设计 |
 | P1 | 拷贝 `SNAPSHOT_MEMNODE_LIFECYCLE.md` | 便于运维/开发理解泄压 |
 | P2 | runtime `store/iavl` 改包 sei-iavl | 统一证明与 Export/Import 类型 |
-| P2 | composite + flatkv | 仅当 Injective 需要 EVM SC 分裂时移植 |
+| P2 | SC composite + flatkv | 仅当 Injective 需要 EVM SC 分裂时移植 |
 | P3 | 恢复 sei-iavl 全量测试 | 为 `cosmos-db` 重新生成 mock |
 
 ---
@@ -316,7 +345,7 @@ diff -ru sei-chain/sei-iavl cosmos-sdk-inj/store/seidb/sc/sei-iavl \
   --exclude benchmarks --exclude cmd --exclude testdata
 
 # Injective 测试
-cd cosmos-sdk-inj/store && go test ./seidb/...
+cd cosmos-sdk-inj/store && go test -tags pebbledb ./seidb/...
 ```
 
 ---
@@ -335,7 +364,12 @@ cd cosmos-sdk-inj/store && go test ./seidb/...
 
 - `store/seidb/sc/memiavl/`  
 - `store/seidb/sc/sei-iavl/`  
+- `store/seidb/ss/composite/`  
+- `store/seidb/ss/cosmos/`  
+- `store/seidb/ss/evm/`  
+- `store/seidb/db_engine/pebbledb/mvcc/`  
 - `store/seidb/rootmulti/sc_memiavl_store.go`  
+- `store/seidb/rootmulti/store.go`  
 - `store/seidb/commitment/store.go`  
 - `store/memiavl_options.go`  
 - `server/util.go` (`GetStoreConfig`, `AddMemIAVLFlags`)

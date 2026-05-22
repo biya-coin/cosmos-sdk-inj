@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	iavl "cosmossdk.io/store/seidb/sc/sei-iavl"
 	dbm "github.com/cosmos/cosmos-db"
 
 	"cosmossdk.io/store/cachemulti"
@@ -18,9 +17,12 @@ import (
 	"cosmossdk.io/store/metrics"
 	pruningtypes "cosmossdk.io/store/pruning/types"
 	"cosmossdk.io/store/seidb/commitment"
-	"cosmossdk.io/store/seidb/sc/memiavl"
+	seidbcfg "cosmossdk.io/store/seidb/config"
 	sctypes "cosmossdk.io/store/seidb/sc/types"
-	"cosmossdk.io/store/seidb/state"
+	seidbss "cosmossdk.io/store/seidb/ss"
+	"cosmossdk.io/store/seidb/ss/state"
+	sstypes "cosmossdk.io/store/seidb/ss/types"
+	ssutils "cosmossdk.io/store/seidb/ss/utils"
 	snapshottypes "cosmossdk.io/store/snapshots/types"
 	"cosmossdk.io/store/types"
 	protoio "github.com/cosmos/gogoproto/io"
@@ -30,19 +32,9 @@ import (
 //
 // Phase B (memiavl enabled): AppHash / WorkingHash / CommitID come from SC (memiavl).
 // Phase A (legacy): delegates hash and commit metadata to runtime rootmulti + cosmos/iavl.
-type Config struct {
-	Home                               string
-	StateCommitmentBackend             string
-	StateStoreBackend                  string
-	KeepRecent                         uint64
-	HistoricalProofQueryMaxConcurrency uint32
-	MemIAVL                            memiavl.Config
-}
-
-type NamedChangeSet struct {
-	Name      string
-	ChangeSet *iavl.ChangeSet
-}
+type Config = seidbcfg.Config
+type NamedChangeSet = sstypes.NamedChangeSet
+type StateStore = sstypes.StateStore
 
 type Store struct {
 	runtime runtimeBackend
@@ -79,6 +71,10 @@ type runtimeBackend interface {
 }
 
 type historicalSnapshotReader interface {
+	Get(storeName string, version int64, key []byte) ([]byte, error)
+	Has(storeName string, version int64, key []byte) (bool, error)
+	Iterator(storeName string, version int64, start, end []byte) (types.Iterator, error)
+	ReverseIterator(storeName string, version int64, start, end []byte) (types.Iterator, error)
 	Snapshot(storeName string, version int64) (map[string][]byte, bool)
 	HasVersion(version int64) bool
 }
@@ -99,7 +95,7 @@ func NewStore(db dbm.DB, logger log.Logger, metricGatherer metrics.StoreMetrics,
 		ckvStore:     make(map[types.StoreKey]types.CommitKVStore),
 	}
 	store.scStore = newSCStoreFromConfig(db, cfg)
-	store.ss = newStateStoreFromConfig(db, cfg, store.scStore)
+	store.ss = seidbss.NewFromConfig(db, cfg, store.scStore)
 	if cfg.HistoricalProofQueryMaxConcurrency > 0 {
 		store.historicalProofQueryGate = make(chan struct{}, int(cfg.HistoricalProofQueryMaxConcurrency))
 	}
@@ -246,7 +242,7 @@ func (s *Store) SetSCStore(scStore SCStore) {
 		_ = s.ss.Close()
 	}
 	s.scStore = scStore
-	s.ss = newStateStoreFromConfig(s.db, s.config, s.scStore)
+	s.ss = seidbss.NewFromConfig(s.db, s.config, s.scStore)
 }
 
 func (s *Store) loadRuntimeVersion(ver int64, upgrades *types.StoreUpgrades) error {
@@ -520,7 +516,7 @@ func (s *Store) resolveHistoricalSnapshotReader(version int64) historicalSnapsho
 }
 
 func (s *Store) Commit() types.CommitID {
-	changeSets := cloneNamedChangeSets(s.collectPendingChangeSets())
+	changeSets := ssutils.CloneNamedChangeSets(s.collectPendingChangeSets())
 	targetVersion := s.nextCommitVersion()
 
 	// Follow storev2-style flush ordering: apply SS/SC changes before runtime commit.
@@ -645,8 +641,8 @@ func (s *Store) Restore(height uint64, format uint32, protoReader protoio.Reader
 		ssImportErr error
 		ssImported bool
 	)
-	if importer, ok := s.ss.(snapshotImporter); ok {
-		nodeCh := make(chan SnapshotImportNode, 4096)
+	if importer, ok := s.ss.(sstypes.SnapshotImporter); ok {
+		nodeCh := make(chan sstypes.SnapshotImportNode, 4096)
 		doneCh := make(chan error, 1)
 		restoreVersion := int64(height)
 		go func() {
@@ -660,7 +656,7 @@ func (s *Store) Restore(height uint64, format uint32, protoReader protoio.Reader
 				if nodeHeight != 0 {
 					return
 				}
-				nodeCh <- SnapshotImportNode{
+				nodeCh <- sstypes.SnapshotImportNode{
 					StoreKey: storeName,
 					Key:      append([]byte(nil), key...),
 					Value:    append([]byte(nil), value...),
@@ -828,14 +824,10 @@ func (s *Store) iavlStoreNames() []string {
 	return names
 }
 
-func (s *Store) buildCacheStores(version int64, historical bool, readers ...interface {
-	Snapshot(storeName string, version int64) (map[string][]byte, bool)
-}) map[types.StoreKey]types.CacheWrapper {
+func (s *Store) buildCacheStores(version int64, historical bool, readers ...historicalSnapshotReader) map[types.StoreKey]types.CacheWrapper {
 	keys := s.sortedStoreKeys()
 
-	var snapshotReader interface {
-		Snapshot(storeName string, version int64) (map[string][]byte, bool)
-	}
+	var snapshotReader historicalSnapshotReader
 	if len(readers) > 0 {
 		snapshotReader = readers[0]
 	}
@@ -1034,7 +1026,7 @@ func (s *Store) nextCommitVersion() int64 {
 }
 
 func (s *Store) flushPendingToSC() error {
-	changeSets := cloneNamedChangeSets(s.collectPendingChangeSets())
+	changeSets := ssutils.CloneNamedChangeSets(s.collectPendingChangeSets())
 	if len(changeSets) == 0 {
 		return nil
 	}
@@ -1069,33 +1061,6 @@ func (s *Store) commitInfoForProof(height int64) (*types.CommitInfo, error) {
 		return nil, fmt.Errorf("commit info for height %d unavailable (sc latest=%d)", height, latest)
 	}
 	return s.runtime.GetCommitInfo(height)
-}
-
-func cloneNamedChangeSets(in []*NamedChangeSet) []*NamedChangeSet {
-	out := make([]*NamedChangeSet, 0, len(in))
-	for _, named := range in {
-		if named == nil || named.ChangeSet == nil {
-			continue
-		}
-		cs := &iavl.ChangeSet{
-			Pairs: make([]*iavl.KVPair, 0, len(named.ChangeSet.Pairs)),
-		}
-		for _, p := range named.ChangeSet.Pairs {
-			if p == nil {
-				continue
-			}
-			cs.Pairs = append(cs.Pairs, &iavl.KVPair{
-				Delete: p.Delete,
-				Key:    cloneBytesNonNil(p.Key),
-				Value:  cloneBytesNonNil(p.Value),
-			})
-		}
-		out = append(out, &NamedChangeSet{
-			Name:      named.Name,
-			ChangeSet: cs,
-		})
-	}
-	return out
 }
 
 func parsePath(path string) (storeName, subpath string, err error) {
