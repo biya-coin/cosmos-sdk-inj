@@ -375,6 +375,10 @@ func (isd IncrementSequenceDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, sim
 		return ctx, errorsmod.Wrap(sdkerrors.ErrTxDecode, "invalid transaction type")
 	}
 
+	if ctx.IsCheckTx() || ctx.IsReCheckTx() {
+		return next(ctx, tx, simulate)
+	}
+
 	feeTx, isFeeTx := tx.(sdk.FeeTx)
 	signers, err := sigTx.GetSigners()
 	if err != nil {
