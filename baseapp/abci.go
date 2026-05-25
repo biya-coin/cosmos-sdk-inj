@@ -1006,6 +1006,7 @@ func (app *BaseApp) checkHalt(height int64, time time.Time) error {
 // against that height and gracefully halt if it matches the latest committed
 // height.
 func (app *BaseApp) Commit() (*abci.CommitResponse, error) {
+	commitStart := time.Now()
 	header := app.finalizeBlockState.Context().BlockHeader()
 	retainHeight := app.GetBlockRetentionHeight(header.Height)
 
@@ -1018,7 +1019,9 @@ func (app *BaseApp) Commit() (*abci.CommitResponse, error) {
 		rms.SetCommitHeader(header)
 	}
 
+	tCommit := time.Now()
 	app.cms.Commit()
+	commitStoreMs := float64(time.Since(tCommit).Nanoseconds()) / 1e6
 
 	resp := &abci.CommitResponse{
 		RetainHeight: retainHeight,
@@ -1051,6 +1054,8 @@ func (app *BaseApp) Commit() (*abci.CommitResponse, error) {
 
 	// The SnapshotIfApplicable method will create the snapshot by starting the goroutine
 	app.snapshotManager.SnapshotIfApplicable(header.Height)
+	totalCommitMs := float64(time.Since(commitStart).Nanoseconds()) / 1e6
+	fmt.Printf("msg=baseapp_commit_timing height=%d total_ms=%.3f cms_commit_ms=%.3f\n", header.Height, totalCommitMs, commitStoreMs)
 
 	return resp, nil
 }
