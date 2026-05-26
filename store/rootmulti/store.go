@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v1"
 	dbm "github.com/cosmos/cosmos-db"
@@ -487,7 +488,10 @@ func (rs *Store) PausePruning(pause bool) {
 
 // Commit implements Committer/CommitStore.
 func (rs *Store) Commit() types.CommitID {
+	commitStart := time.Now()
+	var flushMetadataMs, cleanupRemovedMs, pruneMs float64
 	var previousHeight, version int64
+	tVersion := time.Now()
 	if rs.lastCommitInfo.GetVersion() == 0 && rs.initialVersion > 1 {
 		// This case means that no commit has been made in the store, we
 		// start from initialVersion.
@@ -505,7 +509,9 @@ func (rs *Store) Commit() types.CommitID {
 	if rs.commitHeader.Height != version {
 		rs.logger.Debug("commit header and version mismatch", "header_height", rs.commitHeader.Height, "version", version)
 	}
+	versionMs := float64(time.Since(tVersion).Nanoseconds()) / 1e6
 
+	tCommitStores := time.Now()
 	func() { // ensure unpause
 		// set the committing flag on all stores to block the pruning
 		rs.PausePruning(true)
@@ -513,11 +519,27 @@ func (rs *Store) Commit() types.CommitID {
 		defer rs.PausePruning(false)
 		rs.lastCommitInfo = commitStores(version, rs.stores, rs.removalMap)
 	}()
+	commitStoresMs := float64(time.Since(tCommitStores).Nanoseconds()) / 1e6
 
 	rs.lastCommitInfo.Timestamp = rs.commitHeader.Time
-	defer rs.flushMetadata(rs.db, version, rs.lastCommitInfo)
+	defer func() {
+		tFlushMetadata := time.Now()
+		rs.flushMetadata(rs.db, version, rs.lastCommitInfo)
+		flushMetadataMs = float64(time.Since(tFlushMetadata).Nanoseconds()) / 1e6
+		totalMs := float64(time.Since(commitStart).Nanoseconds()) / 1e6
+		fmt.Printf("msg=rootmulti_commit_timing height=%d version_calc_ms=%.3f commit_stores_ms=%.3f flush_metadata_ms=%.3f cleanup_removed_ms=%.3f prune_ms=%.3f total_ms=%.3f\n",
+			version,
+			versionMs,
+			commitStoresMs,
+			flushMetadataMs,
+			cleanupRemovedMs,
+			pruneMs,
+			totalMs,
+		)
+	}()
 
 	// remove remnants of removed stores
+	tCleanupRemoved := time.Now()
 	for sk := range rs.removalMap {
 		if _, ok := rs.stores[sk]; ok {
 			delete(rs.stores, sk)
@@ -525,16 +547,19 @@ func (rs *Store) Commit() types.CommitID {
 			delete(rs.keysByName, sk.Name())
 		}
 	}
+	cleanupRemovedMs = float64(time.Since(tCleanupRemoved).Nanoseconds()) / 1e6
 
 	// reset the removalMap
 	rs.removalMap = make(map[types.StoreKey]bool)
 
+	tPrune := time.Now()
 	if err := rs.handlePruning(version); err != nil {
 		rs.logger.Error(
 			"failed to prune store, please check your pruning configuration",
 			"err", err,
 		)
 	}
+	pruneMs = float64(time.Since(tPrune).Nanoseconds()) / 1e6
 
 	return types.CommitID{
 		Version: version,
@@ -1235,10 +1260,12 @@ func GetLatestVersion(db dbm.DB) int64 {
 
 // Commits each store and returns a new commitInfo.
 func commitStores(version int64, storeMap map[types.StoreKey]types.CommitStore, removalMap map[types.StoreKey]bool) *types.CommitInfo {
+	commitStoresStart := time.Now()
 	storeInfos := make([]types.StoreInfo, 0, len(storeMap))
 	storeKeys := keysFromStoreKeyMap(storeMap)
 
 	for _, key := range storeKeys {
+		storeCommitStart := time.Now()
 		store := storeMap[key]
 		last := store.LastCommitID()
 
@@ -1252,8 +1279,20 @@ func commitStores(version int64, storeMap map[types.StoreKey]types.CommitStore, 
 		} else {
 			commitID = store.Commit()
 		}
+		storeCommitMs := float64(time.Since(storeCommitStart).Nanoseconds()) / 1e6
 
 		storeType := store.GetStoreType()
+		if storeCommitMs > 1 {
+			fmt.Printf("msg=rootmulti_commit_store_timing height=%d store=%s store_type=%v last_version=%d commit_version=%d commit_ms=%.3f reused_last=%t\n",
+				version,
+				key.Name(),
+				storeType,
+				last.Version,
+				commitID.Version,
+				storeCommitMs,
+				last.Version >= version,
+			)
+		}
 		if storeType == types.StoreTypeTransient || storeType == types.StoreTypeMemory || storeType == types.StoreTypeObject {
 			continue
 		}
@@ -1269,6 +1308,7 @@ func commitStores(version int64, storeMap map[types.StoreKey]types.CommitStore, 
 	sort.SliceStable(storeInfos, func(i, j int) bool {
 		return strings.Compare(storeInfos[i].Name, storeInfos[j].Name) < 0
 	})
+	fmt.Printf("msg=rootmulti_commit_stores_timing height=%d store_count=%d total_ms=%.3f\n", version, len(storeKeys), float64(time.Since(commitStoresStart).Nanoseconds())/1e6)
 
 	return &types.CommitInfo{
 		Version:    version,
