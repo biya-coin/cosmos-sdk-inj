@@ -453,6 +453,11 @@ func (app *BaseApp) PrepareProposal(req *abci.PrepareProposalRequest) (resp *abc
 	prepareMs := float64(time.Since(tPrepare).Nanoseconds()) / 1e6
 	totalMs := float64(time.Since(tTotal).Nanoseconds()) / 1e6
 	fmt.Printf("msg=baseapp_prepare_proposal_timing total_ms=%.3f build_header_ms=%.3f set_state_ms=%.3f set_ctx_ms=%.3f prepare_ms=%.3f\n", totalMs, buildHeaderMs, setStateMs, setCtxMs, prepareMs)
+	app.perfMetrics.PrepareProposalStepSeconds.With("step", "total").Observe(totalMs / 1000)
+	app.perfMetrics.PrepareProposalStepSeconds.With("step", "build_header").Observe(buildHeaderMs / 1000)
+	app.perfMetrics.PrepareProposalStepSeconds.With("step", "set_state").Observe(setStateMs / 1000)
+	app.perfMetrics.PrepareProposalStepSeconds.With("step", "set_ctx").Observe(setCtxMs / 1000)
+	app.perfMetrics.PrepareProposalStepSeconds.With("step", "prepare").Observe(prepareMs / 1000)
 	if err != nil {
 		app.logger.Error("failed to prepare proposal", "height", req.Height, "time", req.Time, "err", err)
 		return &abci.PrepareProposalResponse{Txs: req.Txs}, nil
@@ -857,13 +862,17 @@ func (app *BaseApp) internalFinalizeBlock(ctx context.Context, req *abci.Finaliz
 	events = append(events, endBlock.Events...)
 	cp := app.GetConsensusParams(app.finalizeBlockState.Context())
 
+	ifbTotalMs := float64(ifbT3.Sub(ifbFuncStart).Nanoseconds()) / 1e6
+	ifb1Ms := float64(ifbT1.Sub(ifbT0).Nanoseconds()) / 1e6
+	ifb2Ms := float64(ifbT2.Sub(ifbT1).Nanoseconds()) / 1e6
+	ifb3Ms := float64(ifbT3.Sub(ifbT2).Nanoseconds()) / 1e6
 	fmt.Printf("msg=app_internal_finalize_block height=%d ifb_total_ms=%.3f ifb1_begin_block_ms=%.3f ifb2_execute_txs_ms=%.3f ifb3_end_block_ms=%.3f\n",
-		req.Height,
-		float64(ifbT3.Sub(ifbFuncStart).Nanoseconds())/1e6,
-		float64(ifbT1.Sub(ifbT0).Nanoseconds())/1e6,
-		float64(ifbT2.Sub(ifbT1).Nanoseconds())/1e6,
-		float64(ifbT3.Sub(ifbT2).Nanoseconds())/1e6,
+		req.Height, ifbTotalMs, ifb1Ms, ifb2Ms, ifb3Ms,
 	)
+	app.perfMetrics.InternalFinalizeBlockStepSeconds.With("step", "total").Observe(ifbTotalMs / 1000)
+	app.perfMetrics.InternalFinalizeBlockStepSeconds.With("step", "begin_block").Observe(ifb1Ms / 1000)
+	app.perfMetrics.InternalFinalizeBlockStepSeconds.With("step", "execute_txs").Observe(ifb2Ms / 1000)
+	app.perfMetrics.InternalFinalizeBlockStepSeconds.With("step", "end_block").Observe(ifb3Ms / 1000)
 
 	return &abci.FinalizeBlockResponse{
 		Events:                events,
@@ -910,6 +919,9 @@ func (app *BaseApp) executeTxs(ctx context.Context, txs [][]byte) ([]*abci.ExecT
 	height := app.finalizeBlockState.Context().BlockHeight()
 	fmt.Printf("msg=execute_txs_substep height=%d etx1_ante_ms=%.3f etx2_msgs_ms=%.3f etx3_post_ms=%.3f\n",
 		height, blockTxAnteMs, blockTxMsgsMs, blockTxPostMs)
+	app.perfMetrics.ExecuteTxsStepSeconds.With("step", "ante").Observe(blockTxAnteMs / 1000)
+	app.perfMetrics.ExecuteTxsStepSeconds.With("step", "msgs").Observe(blockTxMsgsMs / 1000)
+	app.perfMetrics.ExecuteTxsStepSeconds.With("step", "post").Observe(blockTxPostMs / 1000)
 	return txResults, nil
 }
 
@@ -948,12 +960,15 @@ func (app *BaseApp) FinalizeBlock(req *abci.FinalizeBlockRequest) (res *abci.Fin
 			if res != nil {
 				res.AppHash = app.workingHash()
 				fbT2 = time.Now()
+				oeTotalMs := float64(fbT2.Sub(fbT0).Nanoseconds()) / 1e6
+				oeWaitMs := float64(fbT1.Sub(fbT0).Nanoseconds()) / 1e6
+				oeHashMs := float64(fbT2.Sub(fbT1).Nanoseconds()) / 1e6
 				fmt.Printf("msg=app_finalize_block height=%d app_fb_total_ms=%.3f fb1_oe_wait_ms=%.3f fb2_working_hash_ms=%.3f\n",
-					req.Height,
-					float64(fbT2.Sub(fbT0).Nanoseconds())/1e6,
-					float64(fbT1.Sub(fbT0).Nanoseconds())/1e6,
-					float64(fbT2.Sub(fbT1).Nanoseconds())/1e6,
+					req.Height, oeTotalMs, oeWaitMs, oeHashMs,
 				)
+				app.perfMetrics.FinalizeBlockStepSeconds.With("step", "total").Observe(oeTotalMs / 1000)
+				app.perfMetrics.FinalizeBlockStepSeconds.With("step", "oe_wait").Observe(oeWaitMs / 1000)
+				app.perfMetrics.FinalizeBlockStepSeconds.With("step", "working_hash").Observe(oeHashMs / 1000)
 			}
 
 			return res, err
@@ -970,11 +985,15 @@ func (app *BaseApp) FinalizeBlock(req *abci.FinalizeBlockRequest) (res *abci.Fin
 	if res != nil {
 		res.AppHash = app.workingHash()
 		fbT2 = time.Now()
+		noeExecMs := float64(fbT1.Sub(fbT0).Nanoseconds()) / 1e6
+		noeHashMs := float64(fbT2.Sub(fbT1).Nanoseconds()) / 1e6
+		noeTotal := noeExecMs + noeHashMs
 		fmt.Printf("msg=app_finalize_block height=%d fb1_internal_exec_ms=%.3f fb2_working_hash_ms=%.3f\n",
-			req.Height,
-			float64(fbT1.Sub(fbT0).Nanoseconds())/1e6,
-			float64(fbT2.Sub(fbT1).Nanoseconds())/1e6,
+			req.Height, noeExecMs, noeHashMs,
 		)
+		app.perfMetrics.FinalizeBlockStepSeconds.With("step", "total").Observe(noeTotal / 1000)
+		app.perfMetrics.FinalizeBlockStepSeconds.With("step", "internal_exec").Observe(noeExecMs / 1000)
+		app.perfMetrics.FinalizeBlockStepSeconds.With("step", "working_hash").Observe(noeHashMs / 1000)
 	}
 
 	return res, err
