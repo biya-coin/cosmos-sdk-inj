@@ -386,12 +386,15 @@ func (app *BaseApp) CheckTx(req *abci.CheckTxRequest) (*abci.CheckTxResponse, er
 // Ref: https://github.com/cosmos/cosmos-sdk/blob/main/docs/architecture/adr-060-abci-1.0.md
 // Ref: https://github.com/cometbft/cometbft/blob/main/spec/abci/abci%2B%2B_basic_concepts.md
 func (app *BaseApp) PrepareProposal(req *abci.PrepareProposalRequest) (resp *abci.PrepareProposalResponse, err error) {
+	tTotal := time.Now()
+
 	if app.prepareProposal == nil {
 		return nil, errors.New("PrepareProposal handler not set")
 	}
 
 	// Always reset state given that PrepareProposal can timeout and be called
 	// again in a subsequent round.
+	tBuildHeader := time.Now()
 	header := cmtproto.Header{
 		ChainID:            app.chainID,
 		Height:             req.Height,
@@ -400,7 +403,11 @@ func (app *BaseApp) PrepareProposal(req *abci.PrepareProposalRequest) (resp *abc
 		NextValidatorsHash: req.NextValidatorsHash,
 		AppHash:            app.LastCommitID().Hash,
 	}
+	buildHeaderMs := float64(time.Since(tBuildHeader).Nanoseconds()) / 1e6
+
+	tSetState := time.Now()
 	app.setState(execModePrepareProposal, header)
+	setStateMs := float64(time.Since(tSetState).Nanoseconds()) / 1e6
 
 	// CometBFT must never call PrepareProposal with a height of 0.
 	//
@@ -409,6 +416,7 @@ func (app *BaseApp) PrepareProposal(req *abci.PrepareProposalRequest) (resp *abc
 		return nil, errors.New("PrepareProposal called with invalid height")
 	}
 
+	tSetCtx := time.Now()
 	app.prepareProposalState.SetContext(app.getContextForProposal(app.prepareProposalState.Context(), req.Height).
 		WithVoteInfos(toVoteInfo(req.LocalLastCommit.Votes)). // this is a set of votes that are not finalized yet, wait for commit
 		WithBlockHeight(req.Height).
@@ -425,6 +433,7 @@ func (app *BaseApp) PrepareProposal(req *abci.PrepareProposalRequest) (resp *abc
 	app.prepareProposalState.SetContext(app.prepareProposalState.Context().
 		WithConsensusParams(app.GetConsensusParams(app.prepareProposalState.Context())).
 		WithBlockGasMeter(app.getBlockGasMeter(app.prepareProposalState.Context())))
+	setCtxMs := float64(time.Since(tSetCtx).Nanoseconds()) / 1e6
 
 	defer func() {
 		if err := recover(); err != nil {
@@ -439,11 +448,16 @@ func (app *BaseApp) PrepareProposal(req *abci.PrepareProposalRequest) (resp *abc
 		}
 	}()
 
-	tPrepareStart := time.Now()
+	tPrepare := time.Now()
 	resp, err = app.prepareProposal(app.prepareProposalState.Context(), req)
-	prepareHandlerMs := float64(time.Since(tPrepareStart).Nanoseconds()) / 1e6
-	fmt.Printf("msg=sdk_prepare_timing height=%d prepare_handler_ms=%.3f\n", req.Height, prepareHandlerMs)
-
+	prepareMs := float64(time.Since(tPrepare).Nanoseconds()) / 1e6
+	totalMs := float64(time.Since(tTotal).Nanoseconds()) / 1e6
+	fmt.Printf("msg=baseapp_prepare_proposal_timing total_ms=%.3f build_header_ms=%.3f set_state_ms=%.3f set_ctx_ms=%.3f prepare_ms=%.3f\n", totalMs, buildHeaderMs, setStateMs, setCtxMs, prepareMs)
+	app.perfMetrics.PrepareProposalStepSeconds.With("step", "total").Observe(totalMs / 1000)
+	app.perfMetrics.PrepareProposalStepSeconds.With("step", "build_header").Observe(buildHeaderMs / 1000)
+	app.perfMetrics.PrepareProposalStepSeconds.With("step", "set_state").Observe(setStateMs / 1000)
+	app.perfMetrics.PrepareProposalStepSeconds.With("step", "set_ctx").Observe(setCtxMs / 1000)
+	app.perfMetrics.PrepareProposalStepSeconds.With("step", "prepare").Observe(prepareMs / 1000)
 	if err != nil {
 		app.logger.Error("failed to prepare proposal", "height", req.Height, "time", req.Time, "err", err)
 		return &abci.PrepareProposalResponse{Txs: req.Txs}, nil
@@ -848,13 +862,17 @@ func (app *BaseApp) internalFinalizeBlock(ctx context.Context, req *abci.Finaliz
 	events = append(events, endBlock.Events...)
 	cp := app.GetConsensusParams(app.finalizeBlockState.Context())
 
+	ifbTotalMs := float64(ifbT3.Sub(ifbFuncStart).Nanoseconds()) / 1e6
+	ifb1Ms := float64(ifbT1.Sub(ifbT0).Nanoseconds()) / 1e6
+	ifb2Ms := float64(ifbT2.Sub(ifbT1).Nanoseconds()) / 1e6
+	ifb3Ms := float64(ifbT3.Sub(ifbT2).Nanoseconds()) / 1e6
 	fmt.Printf("msg=app_internal_finalize_block height=%d ifb_total_ms=%.3f ifb1_begin_block_ms=%.3f ifb2_execute_txs_ms=%.3f ifb3_end_block_ms=%.3f\n",
-		req.Height,
-		float64(ifbT3.Sub(ifbFuncStart).Nanoseconds())/1e6,
-		float64(ifbT1.Sub(ifbT0).Nanoseconds())/1e6,
-		float64(ifbT2.Sub(ifbT1).Nanoseconds())/1e6,
-		float64(ifbT3.Sub(ifbT2).Nanoseconds())/1e6,
+		req.Height, ifbTotalMs, ifb1Ms, ifb2Ms, ifb3Ms,
 	)
+	app.perfMetrics.InternalFinalizeBlockStepSeconds.With("step", "total").Observe(ifbTotalMs / 1000)
+	app.perfMetrics.InternalFinalizeBlockStepSeconds.With("step", "begin_block").Observe(ifb1Ms / 1000)
+	app.perfMetrics.InternalFinalizeBlockStepSeconds.With("step", "execute_txs").Observe(ifb2Ms / 1000)
+	app.perfMetrics.InternalFinalizeBlockStepSeconds.With("step", "end_block").Observe(ifb3Ms / 1000)
 
 	return &abci.FinalizeBlockResponse{
 		Events:                events,
@@ -901,6 +919,9 @@ func (app *BaseApp) executeTxs(ctx context.Context, txs [][]byte) ([]*abci.ExecT
 	height := app.finalizeBlockState.Context().BlockHeight()
 	fmt.Printf("msg=execute_txs_substep height=%d etx1_ante_ms=%.3f etx2_msgs_ms=%.3f etx3_post_ms=%.3f\n",
 		height, blockTxAnteMs, blockTxMsgsMs, blockTxPostMs)
+	app.perfMetrics.ExecuteTxsStepSeconds.With("step", "ante").Observe(blockTxAnteMs / 1000)
+	app.perfMetrics.ExecuteTxsStepSeconds.With("step", "msgs").Observe(blockTxMsgsMs / 1000)
+	app.perfMetrics.ExecuteTxsStepSeconds.With("step", "post").Observe(blockTxPostMs / 1000)
 	return txResults, nil
 }
 
@@ -939,12 +960,15 @@ func (app *BaseApp) FinalizeBlock(req *abci.FinalizeBlockRequest) (res *abci.Fin
 			if res != nil {
 				res.AppHash = app.workingHash()
 				fbT2 = time.Now()
+				oeTotalMs := float64(fbT2.Sub(fbT0).Nanoseconds()) / 1e6
+				oeWaitMs := float64(fbT1.Sub(fbT0).Nanoseconds()) / 1e6
+				oeHashMs := float64(fbT2.Sub(fbT1).Nanoseconds()) / 1e6
 				fmt.Printf("msg=app_finalize_block height=%d app_fb_total_ms=%.3f fb1_oe_wait_ms=%.3f fb2_working_hash_ms=%.3f\n",
-					req.Height,
-					float64(fbT2.Sub(fbT0).Nanoseconds())/1e6,
-					float64(fbT1.Sub(fbT0).Nanoseconds())/1e6,
-					float64(fbT2.Sub(fbT1).Nanoseconds())/1e6,
+					req.Height, oeTotalMs, oeWaitMs, oeHashMs,
 				)
+				app.perfMetrics.FinalizeBlockStepSeconds.With("step", "total").Observe(oeTotalMs / 1000)
+				app.perfMetrics.FinalizeBlockStepSeconds.With("step", "oe_wait").Observe(oeWaitMs / 1000)
+				app.perfMetrics.FinalizeBlockStepSeconds.With("step", "working_hash").Observe(oeHashMs / 1000)
 			}
 
 			return res, err
@@ -961,11 +985,15 @@ func (app *BaseApp) FinalizeBlock(req *abci.FinalizeBlockRequest) (res *abci.Fin
 	if res != nil {
 		res.AppHash = app.workingHash()
 		fbT2 = time.Now()
+		noeExecMs := float64(fbT1.Sub(fbT0).Nanoseconds()) / 1e6
+		noeHashMs := float64(fbT2.Sub(fbT1).Nanoseconds()) / 1e6
+		noeTotal := noeExecMs + noeHashMs
 		fmt.Printf("msg=app_finalize_block height=%d fb1_internal_exec_ms=%.3f fb2_working_hash_ms=%.3f\n",
-			req.Height,
-			float64(fbT1.Sub(fbT0).Nanoseconds())/1e6,
-			float64(fbT2.Sub(fbT1).Nanoseconds())/1e6,
+			req.Height, noeExecMs, noeHashMs,
 		)
+		app.perfMetrics.FinalizeBlockStepSeconds.With("step", "total").Observe(noeTotal / 1000)
+		app.perfMetrics.FinalizeBlockStepSeconds.With("step", "internal_exec").Observe(noeExecMs / 1000)
+		app.perfMetrics.FinalizeBlockStepSeconds.With("step", "working_hash").Observe(noeHashMs / 1000)
 	}
 
 	return res, err
@@ -997,6 +1025,7 @@ func (app *BaseApp) checkHalt(height int64, time time.Time) error {
 // against that height and gracefully halt if it matches the latest committed
 // height.
 func (app *BaseApp) Commit() (*abci.CommitResponse, error) {
+	commitStart := time.Now()
 	header := app.finalizeBlockState.Context().BlockHeader()
 	retainHeight := app.GetBlockRetentionHeight(header.Height)
 
@@ -1009,7 +1038,9 @@ func (app *BaseApp) Commit() (*abci.CommitResponse, error) {
 		rms.SetCommitHeader(header)
 	}
 
+	tCommit := time.Now()
 	app.cms.Commit()
+	commitStoreMs := float64(time.Since(tCommit).Nanoseconds()) / 1e6
 
 	resp := &abci.CommitResponse{
 		RetainHeight: retainHeight,
@@ -1042,6 +1073,8 @@ func (app *BaseApp) Commit() (*abci.CommitResponse, error) {
 
 	// The SnapshotIfApplicable method will create the snapshot by starting the goroutine
 	app.snapshotManager.SnapshotIfApplicable(header.Height)
+	totalCommitMs := float64(time.Since(commitStart).Nanoseconds()) / 1e6
+	fmt.Printf("msg=baseapp_commit_timing height=%d total_ms=%.3f cms_commit_ms=%.3f\n", header.Height, totalCommitMs, commitStoreMs)
 
 	return resp, nil
 }

@@ -208,6 +208,10 @@ type BaseApp struct {
 	StreamEvents   chan StreamEvents
 
 	traceFlightRecorder *metrics.TraceRecorder
+
+	// perfMetrics holds custom Prometheus performance histograms.
+	// Populated by PrometheusMetrics option; defaults to no-op.
+	perfMetrics *perfMetrics
 }
 
 // NewBaseApp returns a reference to an initialized BaseApp. It accepts a
@@ -259,6 +263,10 @@ func NewBaseApp(
 	}
 
 	app.runTxRecoveryMiddleware = newDefaultRecoveryMiddleware()
+
+	if app.perfMetrics == nil {
+		app.perfMetrics = newNopMetrics()
+	}
 
 	// Initialize with an empty interface registry to avoid nil pointer dereference.
 	// Unless SetInterfaceRegistry is called with an interface registry with proper address codecs baseapp will panic.

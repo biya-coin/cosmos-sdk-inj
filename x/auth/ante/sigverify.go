@@ -286,11 +286,22 @@ func (svd SigVerificationDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simul
 		}
 
 		// Check account sequence number.
-		if sig.Sequence != acc.GetSequence() {
-			return ctx, errorsmod.Wrapf(
-				sdkerrors.ErrWrongSequence,
-				"account sequence mismatch, expected %d, got %d", acc.GetSequence(), sig.Sequence,
-			)
+		// CheckTx 阶段只基于 committed state 做放宽校验，不要求连续；
+		// 打包/执行阶段仍要求严格连续，即 sig.Sequence == acc.GetSequence()。
+		if ctx.IsCheckTx() {
+			if sig.Sequence < acc.GetSequence() {
+				return ctx, errorsmod.Wrapf(
+					sdkerrors.ErrWrongSequence,
+					"account sequence must be greater than or equal to committed, expected >= %d, got %d", acc.GetSequence(), sig.Sequence,
+				)
+			}
+		} else {
+			if sig.Sequence != acc.GetSequence() {
+				return ctx, errorsmod.Wrapf(
+					sdkerrors.ErrWrongSequence,
+					"account sequence mismatch, expected %d, got %d", acc.GetSequence(), sig.Sequence,
+				)
+			}
 		}
 
 		// retrieve signer data
@@ -362,6 +373,10 @@ func (isd IncrementSequenceDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, sim
 	sigTx, ok := tx.(authsigning.SigVerifiableTx)
 	if !ok {
 		return ctx, errorsmod.Wrap(sdkerrors.ErrTxDecode, "invalid transaction type")
+	}
+
+	if ctx.IsCheckTx() || ctx.IsReCheckTx() {
+		return next(ctx, tx, simulate)
 	}
 
 	feeTx, isFeeTx := tx.(sdk.FeeTx)
