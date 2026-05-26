@@ -45,6 +45,11 @@ type perfMetrics struct {
 	// 对应 Loki msg=app_finalize_block
 	// Labels: step = total | oe_wait | internal_exec | working_hash
 	FinalizeBlockStepSeconds cmtmetrics.Histogram
+
+	// ── BaseApp Commit 子步骤（秒） ──────────────────────────────────────
+	// 对应 Loki msg=baseapp_commit_timing
+	// Labels: step = total | cms_commit
+	BaseAppCommitStepSeconds cmtmetrics.Histogram
 }
 
 // PrometheusMetrics constructs a perfMetrics backed by real Prometheus
@@ -82,6 +87,14 @@ func newPrometheusMetrics(namespace string) *perfMetrics {
 			Help:      "Sub-step durations inside FinalizeBlock (OE path and non-OE path).",
 			Buckets:   []float64{0.1, 0.5, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 15},
 		}, []string{"step"}),
+
+		BaseAppCommitStepSeconds: prommetrics.NewHistogramFrom(stdprometheus.HistogramOpts{
+			Namespace: namespace,
+			Subsystem: "baseapp_commit",
+			Name:      "step_seconds",
+			Help:      "BaseApp Commit sub-step durations (total / cms_commit).",
+			Buckets:   []float64{0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 1, 1.5, 2},
+		}, []string{"step"}),
 	}
 }
 
@@ -93,5 +106,6 @@ func newNopMetrics() *perfMetrics {
 		InternalFinalizeBlockStepSeconds: discard.NewHistogram(),
 		ExecuteTxsStepSeconds:            discard.NewHistogram(),
 		FinalizeBlockStepSeconds:         discard.NewHistogram(),
+		BaseAppCommitStepSeconds:         discard.NewHistogram(),
 	}
 }

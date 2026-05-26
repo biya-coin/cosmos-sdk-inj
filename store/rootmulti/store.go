@@ -536,6 +536,12 @@ func (rs *Store) Commit() types.CommitID {
 			pruneMs,
 			totalMs,
 		)
+		RootmultiCommitStepSeconds.WithLabelValues("total").Observe(totalMs / 1000)
+		RootmultiCommitStepSeconds.WithLabelValues("version_calc").Observe(versionMs / 1000)
+		RootmultiCommitStepSeconds.WithLabelValues("commit_stores").Observe(commitStoresMs / 1000)
+		RootmultiCommitStepSeconds.WithLabelValues("flush_metadata").Observe(flushMetadataMs / 1000)
+		RootmultiCommitStepSeconds.WithLabelValues("cleanup_removed").Observe(cleanupRemovedMs / 1000)
+		RootmultiCommitStepSeconds.WithLabelValues("prune").Observe(pruneMs / 1000)
 	}()
 
 	// remove remnants of removed stores
