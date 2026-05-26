@@ -15,6 +15,20 @@ func TestGetStoreConfig_Default(t *testing.T) {
 
 	require.Equal(t, store.StoreBackendType(store.StoreBackendIAVL), cfg.Backend)
 	require.False(t, cfg.SeiDB.Enabled)
+	require.Equal(t, 100, cfg.SeiDB.MemIAVL.AsyncCommitBuffer)
+	require.Equal(t, 100, cfg.SeiDB.StateStoreAsyncWriteBuffer)
+}
+
+func TestGetStoreConfig_SeiDBEnabledKeepsAsyncBuffers(t *testing.T) {
+	v := viper.New()
+	v.Set(FlagSeiDBEnabled, true)
+	v.Set(FlagSeiDBHome, "/tmp/seidb")
+
+	cfg := GetStoreConfig(v)
+
+	require.True(t, cfg.SeiDB.Enabled)
+	require.Equal(t, 100, cfg.SeiDB.MemIAVL.AsyncCommitBuffer)
+	require.Equal(t, 100, cfg.SeiDB.StateStoreAsyncWriteBuffer)
 }
 
 func TestGetStoreConfig_SeiDBEnabled(t *testing.T) {

@@ -26,23 +26,46 @@ const (
 )
 
 // MemIAVLConfigFromAppOpts reads [memiavl] settings from viper/app options.
-// Unset keys keep memiavl.DefaultConfig() values (flag defaults should match).
+// Unset keys keep memiavl.DefaultConfig() values.
+//
+// Async commit is controlled solely by AsyncCommitBuffer: >0 enables async WAL
+// (channel buffered writes); <=0 forces synchronous commit. Default is 100.
 func MemIAVLConfigFromAppOpts(appOpts AppOptions) memiavl.Config {
 	cfg := memiavl.DefaultConfig()
 	if appOpts == nil {
 		return cfg
 	}
 
-	cfg.Enable = cast.ToBool(appOpts.Get(MemIAVLOptionEnable))
-	cfg.ZeroCopy = cast.ToBool(appOpts.Get(MemIAVLOptionZeroCopy))
-	cfg.CacheSize = cast.ToInt(appOpts.Get(MemIAVLOptionCacheSize))
-	cfg.AsyncCommitBuffer = cast.ToInt(appOpts.Get(MemIAVLOptionAsyncCommitBuffer))
-	cfg.SnapshotKeepRecent = cast.ToUint32(appOpts.Get(MemIAVLOptionSnapshotKeepRecent))
-	cfg.SnapshotInterval = cast.ToUint32(appOpts.Get(MemIAVLOptionSnapshotInterval))
-	cfg.SnapshotMinTimeInterval = cast.ToUint32(appOpts.Get(MemIAVLOptionSnapshotMinTimeInterval))
-	cfg.SnapshotWriterLimit = cast.ToInt(appOpts.Get(MemIAVLOptionSnapshotWriterLimit))
-	cfg.SnapshotPrefetchThreshold = cast.ToFloat64(appOpts.Get(MemIAVLOptionSnapshotPrefetchThreshold))
-	cfg.SnapshotWriteRateMBps = cast.ToInt(appOpts.Get(MemIAVLOptionSnapshotWriteRateMBps))
+	if v := appOpts.Get(MemIAVLOptionEnable); v != nil {
+		cfg.Enable = cast.ToBool(v)
+	}
+	if v := appOpts.Get(MemIAVLOptionZeroCopy); v != nil {
+		cfg.ZeroCopy = cast.ToBool(v)
+	}
+	if v := appOpts.Get(MemIAVLOptionCacheSize); v != nil {
+		cfg.CacheSize = cast.ToInt(v)
+	}
+	if v := appOpts.Get(MemIAVLOptionAsyncCommitBuffer); v != nil {
+		cfg.AsyncCommitBuffer = cast.ToInt(v)
+	}
+	if v := appOpts.Get(MemIAVLOptionSnapshotKeepRecent); v != nil {
+		cfg.SnapshotKeepRecent = cast.ToUint32(v)
+	}
+	if v := appOpts.Get(MemIAVLOptionSnapshotInterval); v != nil {
+		cfg.SnapshotInterval = cast.ToUint32(v)
+	}
+	if v := appOpts.Get(MemIAVLOptionSnapshotMinTimeInterval); v != nil {
+		cfg.SnapshotMinTimeInterval = cast.ToUint32(v)
+	}
+	if v := appOpts.Get(MemIAVLOptionSnapshotWriterLimit); v != nil {
+		cfg.SnapshotWriterLimit = cast.ToInt(v)
+	}
+	if v := appOpts.Get(MemIAVLOptionSnapshotPrefetchThreshold); v != nil {
+		cfg.SnapshotPrefetchThreshold = cast.ToFloat64(v)
+	}
+	if v := appOpts.Get(MemIAVLOptionSnapshotWriteRateMBps); v != nil {
+		cfg.SnapshotWriteRateMBps = cast.ToInt(v)
+	}
 
 	return cfg
 }

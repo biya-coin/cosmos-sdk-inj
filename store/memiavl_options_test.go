@@ -3,6 +3,7 @@ package store
 import (
 	"testing"
 
+	"cosmossdk.io/store/seidb/sc/memiavl"
 	"github.com/stretchr/testify/require"
 )
 
@@ -10,6 +11,18 @@ type mapAppOptions map[string]interface{}
 
 func (m mapAppOptions) Get(key string) interface{} {
 	return m[key]
+}
+
+func TestMemIAVLConfigFromAppOpts_UnsetKeepsAsyncDefault(t *testing.T) {
+	cfg := MemIAVLConfigFromAppOpts(mapAppOptions{})
+	require.Equal(t, memiavl.DefaultAsyncCommitBuffer, cfg.AsyncCommitBuffer)
+}
+
+func TestMemIAVLConfigFromAppOpts_ZeroBufferDisablesAsync(t *testing.T) {
+	cfg := MemIAVLConfigFromAppOpts(mapAppOptions{
+		MemIAVLOptionAsyncCommitBuffer: 0,
+	})
+	require.Equal(t, 0, cfg.AsyncCommitBuffer)
 }
 
 func TestMemIAVLConfigFromAppOpts(t *testing.T) {

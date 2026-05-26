@@ -595,13 +595,33 @@ func GetStoreConfig(appOpts types.AppOptions) store.StoreConfig {
 	if scBackend := cast.ToString(appOpts.Get(FlagSeiDBSCBackend)); scBackend != "" {
 		cfg.SeiDB.StateCommitmentBackend = scBackend
 	}
-	cfg.SeiDB.StateStoreBackend = cast.ToString(appOpts.Get(FlagSeiDBSSBackend))
-	cfg.SeiDB.StateStoreAsyncWriteBuffer = cast.ToInt(appOpts.Get(FlagSeiDBSSAsyncWriteBuffer))
-	cfg.SeiDB.StateStoreWriteMode = cast.ToString(appOpts.Get(FlagSeiDBSSWriteMode))
-	cfg.SeiDB.StateStoreReadMode = cast.ToString(appOpts.Get(FlagSeiDBSSReadMode))
-	cfg.SeiDB.StateStoreEVMDBDirectory = cast.ToString(appOpts.Get(FlagSeiDBSSEVMDBDirectory))
-	cfg.SeiDB.KeepRecent = cast.ToUint64(appOpts.Get(FlagSeiDBKeepRecent))
-	cfg.SeiDB.HistoricalProofQueryMaxConcurrency = cast.ToUint32(appOpts.Get(FlagSeiDBHistoricalProofMaxConcurrency))
+	if v := appOpts.Get(FlagSeiDBSSBackend); v != nil {
+		if backend := cast.ToString(v); backend != "" {
+			cfg.SeiDB.StateStoreBackend = backend
+		}
+	}
+	if v := appOpts.Get(FlagSeiDBSSAsyncWriteBuffer); v != nil {
+		cfg.SeiDB.StateStoreAsyncWriteBuffer = cast.ToInt(v)
+	}
+	if v := appOpts.Get(FlagSeiDBSSWriteMode); v != nil {
+		if mode := cast.ToString(v); mode != "" {
+			cfg.SeiDB.StateStoreWriteMode = mode
+		}
+	}
+	if v := appOpts.Get(FlagSeiDBSSReadMode); v != nil {
+		if mode := cast.ToString(v); mode != "" {
+			cfg.SeiDB.StateStoreReadMode = mode
+		}
+	}
+	if v := appOpts.Get(FlagSeiDBSSEVMDBDirectory); v != nil {
+		cfg.SeiDB.StateStoreEVMDBDirectory = cast.ToString(v)
+	}
+	if v := appOpts.Get(FlagSeiDBKeepRecent); v != nil {
+		cfg.SeiDB.KeepRecent = cast.ToUint64(v)
+	}
+	if v := appOpts.Get(FlagSeiDBHistoricalProofMaxConcurrency); v != nil {
+		cfg.SeiDB.HistoricalProofQueryMaxConcurrency = cast.ToUint32(v)
+	}
 
 	return cfg.Normalize()
 }
@@ -612,7 +632,7 @@ func AddMemIAVLFlags(fs *pflag.FlagSet) {
 	fs.Bool(store.MemIAVLOptionEnable, def.Enable, "Enable SeiDB state-commit via memIAVL ([memiavl] enable)")
 	fs.Bool(store.MemIAVLOptionZeroCopy, def.ZeroCopy, "memIAVL zero-copy reads from mmap snapshot buffers")
 	fs.Int(store.MemIAVLOptionCacheSize, def.CacheSize, "Per-store LRU cache size on memIAVL trees (reserved)")
-	fs.Int(store.MemIAVLOptionAsyncCommitBuffer, def.AsyncCommitBuffer, "Async WAL commit queue size; <=0 means synchronous commit")
+	fs.Int(store.MemIAVLOptionAsyncCommitBuffer, def.AsyncCommitBuffer, "Async WAL commit queue size; >0 enables async commit, <=0 means synchronous commit")
 	fs.Uint32(store.MemIAVLOptionSnapshotKeepRecent, def.SnapshotKeepRecent, "Old memIAVL snapshots to retain besides the latest")
 	fs.Uint32(store.MemIAVLOptionSnapshotInterval, def.SnapshotInterval, "Block interval between memIAVL snapshots")
 	fs.Uint32(store.MemIAVLOptionSnapshotMinTimeInterval, def.SnapshotMinTimeInterval, "Minimum seconds between memIAVL snapshots during catch-up")
