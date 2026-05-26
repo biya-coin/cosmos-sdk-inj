@@ -108,6 +108,7 @@ func (noopStateStore) ApplyChangeSets(_ int64, _ []*sstypes.NamedChangeSet) erro
 func (noopStateStore) SetLatestVersion(_ int64) error                                           { return nil }
 func (noopStateStore) RollbackToVersion(_ int64) error                                          { return nil }
 func (noopStateStore) SyncFromStores(_ map[types.StoreKey]types.CommitKVStore, _ int64) error  { return nil }
+func (noopStateStore) WaitForPendingWrites()                                                  {}
 func (noopStateStore) Close() error                                                             { return nil }
 
 type scBackedStateStore struct {
@@ -196,6 +197,7 @@ func (s *scBackedStateStore) EarliestVersion() int64 {
 
 func (s *scBackedStateStore) ApplyChangeSets(_ int64, _ []*sstypes.NamedChangeSet) error { return nil }
 func (s *scBackedStateStore) SetLatestVersion(_ int64) error                              { return nil }
+func (s *scBackedStateStore) WaitForPendingWrites()                                       {}
 func (s *scBackedStateStore) Close() error                                                { return nil }
 
 func (s *scBackedStateStore) RollbackToVersion(target int64) error {

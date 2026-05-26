@@ -160,7 +160,8 @@ func (s *rollbackTrackingStateStore) RollbackToVersion(_ int64) error {
 func (s *rollbackTrackingStateStore) SyncFromStores(_ map[types.StoreKey]types.CommitKVStore, _ int64) error {
 	return nil
 }
-func (s *rollbackTrackingStateStore) Close() error { return nil }
+func (s *rollbackTrackingStateStore) WaitForPendingWrites() {}
+func (s *rollbackTrackingStateStore) Close() error          { return nil }
 
 type emptyIterator struct{}
 

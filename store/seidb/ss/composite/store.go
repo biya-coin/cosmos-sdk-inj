@@ -211,6 +211,13 @@ func (s *compositeStateStore) Close() error {
 	return s.closeErr
 }
 
+func (s *compositeStateStore) WaitForPendingWrites() {
+	s.cosmosStore.WaitForPendingWrites()
+	if s.evmStore != nil {
+		s.evmStore.WaitForPendingWrites()
+	}
+}
+
 func recoverCompositeStateStore(changelogPath string, compositeStore *compositeStateStore) error {
 	var cosmosVersion int64
 	if compositeStore.cosmosStore != nil {

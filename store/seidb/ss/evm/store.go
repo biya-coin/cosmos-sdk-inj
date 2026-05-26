@@ -298,6 +298,12 @@ func (s *evmStateStore) SyncFromStores(stores map[types.StoreKey]types.CommitKVS
 	return nil
 }
 
+func (s *evmStateStore) WaitForPendingWrites() {
+	for _, db := range s.managedDBs {
+		db.WaitForPendingWrites()
+	}
+}
+
 func (s *evmStateStore) Close() error {
 	var lastErr error
 	for _, db := range s.managedDBs {

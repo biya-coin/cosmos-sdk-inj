@@ -52,7 +52,7 @@ type Store struct {
 	ckvStore map[types.StoreKey]types.CommitKVStore
 	lastCommitInfo *types.CommitInfo
 	historicalProofQueryGate chan struct{}
-	scOpMtx  sync.Mutex
+	scOpMtx           sync.Mutex
 }
 
 type storeParams struct {
@@ -128,8 +128,8 @@ func (s *Store) LastCommitID() types.CommitID {
 
 func (s *Store) WorkingHash() []byte {
 	if s.usesMemIAVLTreeLayer() {
-		if err := s.flushPendingToSC(); err != nil {
-			panic(fmt.Errorf("flush pending changesets to sc: %w", err))
+		if err := s.flush(); err != nil {
+			panic(fmt.Errorf("flush pending changesets: %w", err))
 		}
 		s.mtx.RLock()
 		defer s.mtx.RUnlock()
@@ -516,10 +516,36 @@ func (s *Store) resolveHistoricalSnapshotReader(version int64) historicalSnapsho
 }
 
 func (s *Store) Commit() types.CommitID {
-	changeSets := ssutils.CloneNamedChangeSets(s.collectPendingChangeSets())
 	targetVersion := s.nextCommitVersion()
 
-	// Follow storev2-style flush ordering: apply SS/SC changes before runtime commit.
+	if s.usesMemIAVLTreeLayer() {
+		if err := s.flush(); err != nil {
+			panic(fmt.Errorf("seidb flush failed at version %d: %w", targetVersion, err))
+		}
+
+		s.scOpMtx.Lock()
+		if err := s.scStore.Commit(targetVersion); err != nil {
+			s.scOpMtx.Unlock()
+			panic(fmt.Errorf("seidb sc commit failed at version %d: %w", targetVersion, err))
+		}
+		s.rebuildCommitStores()
+		s.scOpMtx.Unlock()
+
+		s.commitNonIAVLStores()
+		if err := s.refreshLastCommitInfoFromSC(); err != nil {
+			panic(err)
+		}
+		s.runtime.SyncCommitMetadata(targetVersion, s.lastCommitInfo)
+		s.waitForPendingSSWrites()
+		if err := s.checkBackendsConsistency(targetVersion, true); err != nil {
+			panic(fmt.Errorf("seidb post-commit consistency check failed at version %d: %w", targetVersion, err))
+		}
+		return s.lastCommitInfo.CommitID()
+	}
+
+	changeSets := ssutils.CloneNamedChangeSets(s.collectPendingChangeSets())
+
+	// Legacy path: apply SS/SC changesets synchronously before runtime commit.
 	if s.ss != nil {
 		if len(changeSets) > 0 {
 			if err := s.ss.ApplyChangeSets(targetVersion, changeSets); err != nil {
@@ -543,18 +569,6 @@ func (s *Store) Commit() types.CommitID {
 	s.scOpMtx.Unlock()
 
 	s.clearPendingChangeSets()
-
-	if s.usesMemIAVLTreeLayer() {
-		s.commitNonIAVLStores()
-		if err := s.refreshLastCommitInfoFromSC(); err != nil {
-			panic(err)
-		}
-		s.runtime.SyncCommitMetadata(targetVersion, s.lastCommitInfo)
-		if err := s.checkBackendsConsistency(targetVersion, true); err != nil {
-			panic(fmt.Errorf("seidb post-commit consistency check failed at version %d: %w", targetVersion, err))
-		}
-		return s.lastCommitInfo.CommitID()
-	}
 
 	cid := s.runtime.Commit()
 	if cid.Version != targetVersion {
@@ -1025,14 +1039,57 @@ func (s *Store) nextCommitVersion() int64 {
 	return s.runtime.LastCommitID().Version + 1
 }
 
-func (s *Store) flushPendingToSC() error {
-	changeSets := ssutils.CloneNamedChangeSets(s.collectPendingChangeSets())
-	if len(changeSets) == 0 {
-		return nil
+// flush pops pending module changesets and applies them to SS (WAL + optional async Pebble)
+// and SC, matching sei-chain storev2 flush ordering. WorkingHash triggers flush so ABCI
+// Commit only needs to persist the SC snapshot.
+func (s *Store) flush() error {
+	changeSets := s.popPendingChangeSets()
+	currentVersion := s.nextCommitVersion()
+
+	if s.ss != nil && s.config.StateStoreBackend != "" {
+		if len(changeSets) > 0 {
+			if err := s.ss.ApplyChangeSets(currentVersion, changeSets); err != nil {
+				return fmt.Errorf("ss apply changesets at version %d: %w", currentVersion, err)
+			}
+		} else if err := s.ss.SetLatestVersion(currentVersion); err != nil {
+			return fmt.Errorf("ss set latest version at version %d: %w", currentVersion, err)
+		}
 	}
+
 	s.scOpMtx.Lock()
 	defer s.scOpMtx.Unlock()
 	return s.scStore.ApplyChangeSets(changeSets)
+}
+
+func (s *Store) popPendingChangeSets() []*NamedChangeSet {
+	s.mtx.RLock()
+	defer s.mtx.RUnlock()
+
+	changeSets := make([]*NamedChangeSet, 0, len(s.ckvStore))
+	for key, store := range s.ckvStore {
+		csStore, ok := store.(*commitment.Store)
+		if !ok {
+			continue
+		}
+		cs := csStore.PopChangeSet()
+		if cs == nil || len(cs.Pairs) == 0 {
+			continue
+		}
+		changeSets = append(changeSets, &NamedChangeSet{
+			Name:      key.Name(),
+			ChangeSet: cs,
+		})
+	}
+	sort.SliceStable(changeSets, func(i, j int) bool {
+		return changeSets[i].Name < changeSets[j].Name
+	})
+	return changeSets
+}
+
+func (s *Store) waitForPendingSSWrites() {
+	if s.ss != nil {
+		s.ss.WaitForPendingWrites()
+	}
 }
 
 func (s *Store) commitNonIAVLStores() {

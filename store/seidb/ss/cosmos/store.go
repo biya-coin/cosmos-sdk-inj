@@ -64,3 +64,7 @@ func (s *cosmosStateStore) SyncFromStores(stores map[types.StoreKey]types.Commit
 func (s *cosmosStateStore) Close() error {
 	return s.db.Close()
 }
+
+func (s *cosmosStateStore) WaitForPendingWrites() {
+	s.db.WaitForPendingWrites()
+}

@@ -374,8 +374,11 @@ func (s *pebbleStateStore) SetLatestVersion(version int64) error {
 	if version == 0 {
 		return nil
 	}
-	if err := s.validateNextVersionLocked(version); err != nil {
-		return err
+	if latest := s.latestVersion.Load(); latest > 0 && version <= latest {
+		if version == latest {
+			return nil
+		}
+		return fmt.Errorf("version must increase monotonically, latest=%d got=%d", latest, version)
 	}
 
 	if err := writeSSVersionMetadata(s.storage, ssLatestVersionKey, version); err != nil {

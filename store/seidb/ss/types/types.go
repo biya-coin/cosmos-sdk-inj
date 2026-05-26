@@ -29,6 +29,7 @@ type StateStore interface {
 	SetLatestVersion(version int64) error
 	RollbackToVersion(target int64) error
 	SyncFromStores(stores map[storetypes.StoreKey]storetypes.CommitKVStore, version int64) error
+	WaitForPendingWrites()
 	Close() error
 }
 
