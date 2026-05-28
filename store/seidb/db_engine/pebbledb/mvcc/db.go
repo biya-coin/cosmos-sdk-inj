@@ -28,13 +28,13 @@ type StateStore = sstypes.StateStore
 type NamedChangeSet = sstypes.NamedChangeSet
 
 const (
-	ssVersionSize       = 8
-	ssPrefixStore       = "s/k:"
-	ssLenPrefixStore    = 4
-	ssStorePrefixTpl    = "s/k:%s/"
-	ssLatestVersionKey  = "s/_latest"
+	ssVersionSize        = 8
+	ssPrefixStore        = "s/k:"
+	ssLenPrefixStore     = 4
+	ssStorePrefixTpl     = "s/k:%s/"
+	ssLatestVersionKey   = "s/_latest"
 	ssEarliestVersionKey = "s/_earliest"
-	ssTombstoneValue    = "TOMBSTONE"
+	ssTombstoneValue     = "TOMBSTONE"
 
 	ssImportCommitBatchSize = 10000
 	ssPruneCommitBatchSize  = 50
@@ -1169,7 +1169,6 @@ var MVCCComparer = &pebble.Comparer{
 		}
 		return len(key) + 1
 	},
-
 }
 
 func splitMVCCKey(mvccKey []byte) (key, version []byte, ok bool) {

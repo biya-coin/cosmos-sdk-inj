@@ -12,8 +12,8 @@ import (
 
 	dbm "github.com/cosmos/cosmos-db"
 
-	"cosmossdk.io/store/cachemulti"
 	"cosmossdk.io/log"
+	"cosmossdk.io/store/cachemulti"
 	"cosmossdk.io/store/metrics"
 	pruningtypes "cosmossdk.io/store/pruning/types"
 	"cosmossdk.io/store/seidb/commitment"
@@ -25,6 +25,7 @@ import (
 	ssutils "cosmossdk.io/store/seidb/ss/utils"
 	snapshottypes "cosmossdk.io/store/snapshots/types"
 	"cosmossdk.io/store/types"
+	"github.com/cometbft/cometbft/monitor"
 	protoio "github.com/cosmos/gogoproto/io"
 )
 
@@ -39,20 +40,20 @@ type StateStore = sstypes.StateStore
 type Store struct {
 	runtime runtimeBackend
 
-	db     dbm.DB
-	config Config
+	db      dbm.DB
+	config  Config
 	scStore SCStore
 	ss      StateStore
-	logger log.Logger
+	logger  log.Logger
 	metrics metrics.StoreMetrics
 
-	mtx      sync.RWMutex
-	storesParams map[types.StoreKey]storeParams
-	storeKeys    map[string]types.StoreKey
-	ckvStore map[types.StoreKey]types.CommitKVStore
-	lastCommitInfo *types.CommitInfo
+	mtx                      sync.RWMutex
+	storesParams             map[types.StoreKey]storeParams
+	storeKeys                map[string]types.StoreKey
+	ckvStore                 map[types.StoreKey]types.CommitKVStore
+	lastCommitInfo           *types.CommitInfo
 	historicalProofQueryGate chan struct{}
-	scOpMtx           sync.Mutex
+	scOpMtx                  sync.Mutex
 }
 
 type storeParams struct {
@@ -519,25 +520,24 @@ func (s *Store) Commit() types.CommitID {
 	targetVersion := s.nextCommitVersion()
 
 	if s.usesMemIAVLTreeLayer() {
-		if err := s.flush(); err != nil {
-			panic(fmt.Errorf("seidb flush failed at version %d: %w", targetVersion, err))
-		}
+		// Pending changesets were flushed in WorkingHash (FinalizeBlock); Commit only
+		// persists the SC snapshot, matching sei-chain storev2 ordering.
+		// s.commitNonIAVLStores()
 
 		s.scOpMtx.Lock()
 		if err := s.scStore.Commit(targetVersion); err != nil {
 			s.scOpMtx.Unlock()
 			panic(fmt.Errorf("seidb sc commit failed at version %d: %w", targetVersion, err))
 		}
-		s.rebuildCommitStores()
+		// s.rebuildCommitStores()
 		s.scOpMtx.Unlock()
-
-		s.commitNonIAVLStores()
 		if err := s.refreshLastCommitInfoFromSC(); err != nil {
 			panic(err)
 		}
 		s.runtime.SyncCommitMetadata(targetVersion, s.lastCommitInfo)
-		s.waitForPendingSSWrites()
-		if err := s.checkBackendsConsistency(targetVersion, true); err != nil {
+		// ss wal ensure to be committed
+		// s.waitForPendingSSWrites()
+		if err := s.checkBackendsConsistency(targetVersion, false); err != nil {
 			panic(fmt.Errorf("seidb post-commit consistency check failed at version %d: %w", targetVersion, err))
 		}
 		return s.lastCommitInfo.CommitID()
@@ -650,10 +650,10 @@ func (s *Store) Restore(height uint64, format uint32, protoReader protoio.Reader
 	}
 
 	var (
-		item       snapshottypes.SnapshotItem
-		err        error
+		item        snapshottypes.SnapshotItem
+		err         error
 		ssImportErr error
-		ssImported bool
+		ssImported  bool
 	)
 	if importer, ok := s.ss.(sstypes.SnapshotImporter); ok {
 		nodeCh := make(chan sstypes.SnapshotImportNode, 4096)
@@ -1047,6 +1047,7 @@ func (s *Store) flush() error {
 	currentVersion := s.nextCommitVersion()
 
 	if s.ss != nil && s.config.StateStoreBackend != "" {
+		ssFlushStart := time.Now()
 		if len(changeSets) > 0 {
 			if err := s.ss.ApplyChangeSets(currentVersion, changeSets); err != nil {
 				return fmt.Errorf("ss apply changesets at version %d: %w", currentVersion, err)
@@ -1054,6 +1055,7 @@ func (s *Store) flush() error {
 		} else if err := s.ss.SetLatestVersion(currentVersion); err != nil {
 			return fmt.Errorf("ss set latest version at version %d: %w", currentVersion, err)
 		}
+		monitor.LogSeidbFlushSS(currentVersion, float64(time.Since(ssFlushStart).Nanoseconds())/1e6)
 	}
 
 	s.scOpMtx.Lock()

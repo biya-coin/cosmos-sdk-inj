@@ -21,7 +21,7 @@ require (
 	github.com/chzyer/readline v1.5.1
 	github.com/cockroachdb/apd/v2 v2.0.2
 	github.com/cockroachdb/errors v1.11.3
-	github.com/cometbft/cometbft v0.38.12
+	github.com/cometbft/cometbft v1.0.1
 	github.com/cometbft/cometbft/api v1.0.0
 	github.com/cosmos/btcutil v1.0.5
 	github.com/cosmos/cosmos-db v1.1.1
@@ -221,9 +221,9 @@ replace (
 	github.com/99designs/keyring => github.com/cosmos/keyring v1.2.0
 
 	// Use CometBFT v1.0.1 with Mempool lanes and DOG
-	github.com/cometbft/cometbft => github.com/InjectiveLabs/cometbft v1.0.1-inj.3
-	github.com/cometbft/cometbft/api => github.com/InjectiveLabs/cometbft/api v1.0.0-inj.2
-
+	// github.com/cometbft/cometbft => github.com/biya-coin/cometbft v1.0.2-0.20260526070023-6eb34049f0cb
+	github.com/cometbft/cometbft => github.com/biya-coin/cometbft v1.0.2-0.20260528031915-f75046678e96
+	github.com/cometbft/cometbft/api => github.com/biya-coin/cometbft/api v1.0.0-inj.2
 	// dgrijalva/jwt-go is deprecated and doesn't receive security updates.
 	// TODO: remove it: https://github.com/cosmos/cosmos-sdk/issues/13134
 	github.com/dgrijalva/jwt-go => github.com/golang-jwt/jwt/v4 v4.4.2

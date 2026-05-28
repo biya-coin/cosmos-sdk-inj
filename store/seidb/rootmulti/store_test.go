@@ -31,6 +31,12 @@ func testMemIAVLConfig(t *testing.T) Config {
 	}
 }
 
+// commitMemIAVLBlock mirrors baseapp: flush pending changes in WorkingHash, then Commit.
+func commitMemIAVLBlock(store *Store) types.CommitID {
+	store.WorkingHash()
+	return store.Commit()
+}
+
 func ensureTestStateStoreBackend(t *testing.T) string {
 	t.Helper()
 	registerStateStoreBackendOnce.Do(func() {
@@ -338,7 +344,7 @@ func TestStore_CommitAcceptsEmptyValue(t *testing.T) {
 	kv := store.GetKVStore(key)
 	kv.Set([]byte("empty"), []byte{})
 	require.NotPanics(t, func() {
-		_ = store.Commit()
+		_ = commitMemIAVLBlock(store)
 	})
 
 	latest := store.LastCommitID().Version
@@ -385,12 +391,12 @@ func TestCacheMultiStoreWithVersion_UsesStateStoreForHistorical(t *testing.T) {
 
 	kv := store.GetKVStore(key)
 	kv.Set([]byte("k"), []byte("v1"))
-	c1 := store.Commit()
+	c1 := commitMemIAVLBlock(store)
 	require.Equal(t, int64(1), c1.Version)
 
 	kv = store.GetKVStore(key)
 	kv.Set([]byte("k"), []byte("v2"))
-	c2 := store.Commit()
+	c2 := commitMemIAVLBlock(store)
 	require.Equal(t, int64(2), c2.Version)
 
 	cmsV1, err := store.CacheMultiStoreWithVersion(1)
@@ -412,11 +418,11 @@ func TestQuery_HistoricalNoProofUsesStateSnapshot(t *testing.T) {
 
 	kv := store.GetKVStore(key)
 	kv.Set([]byte("k"), []byte("v1"))
-	store.Commit()
+	commitMemIAVLBlock(store)
 
 	kv = store.GetKVStore(key)
 	kv.Set([]byte("k"), []byte("v2"))
-	store.Commit()
+	commitMemIAVLBlock(store)
 
 	res, err := store.Query(&types.RequestQuery{
 		Path:   "/test/key",
@@ -470,10 +476,10 @@ func TestCacheMultiStoreWithVersion_ErrWhenSSUnavailable(t *testing.T) {
 
 	kv := store.GetKVStore(key)
 	kv.Set([]byte("k"), []byte("v1"))
-	store.Commit()
+	commitMemIAVLBlock(store)
 	kv = store.GetKVStore(key)
 	kv.Set([]byte("k"), []byte("v2"))
-	store.Commit()
+	commitMemIAVLBlock(store)
 
 	_, err := store.CacheMultiStoreWithVersion(1)
 	require.Error(t, err)
@@ -492,10 +498,10 @@ func TestQuery_HistoricalNoProofErrWhenSSUnavailable(t *testing.T) {
 
 	kv := store.GetKVStore(key)
 	kv.Set([]byte("k"), []byte("v1"))
-	store.Commit()
+	commitMemIAVLBlock(store)
 	kv = store.GetKVStore(key)
 	kv.Set([]byte("k"), []byte("v2"))
-	store.Commit()
+	commitMemIAVLBlock(store)
 
 	res, err := store.Query(&types.RequestQuery{
 		Path:   "/test/key",
@@ -551,10 +557,10 @@ func TestCacheMultiStoreWithVersion_ErrWhenStateHistoryUnavailable(t *testing.T)
 
 	kv := store.GetKVStore(key)
 	kv.Set([]byte("k"), []byte("v1"))
-	store.Commit()
+	commitMemIAVLBlock(store)
 	kv = store.GetKVStore(key)
 	kv.Set([]byte("k"), []byte("v2"))
-	store.Commit()
+	commitMemIAVLBlock(store)
 
 	_, err := store.CacheMultiStoreWithVersion(1)
 	require.Error(t, err)
@@ -571,10 +577,10 @@ func TestRollbackToVersion_SyncsSCState(t *testing.T) {
 
 	kv := store.GetKVStore(key)
 	kv.Set([]byte("k"), []byte("v1"))
-	store.Commit()
+	commitMemIAVLBlock(store)
 	kv = store.GetKVStore(key)
 	kv.Set([]byte("k"), []byte("v2"))
-	store.Commit()
+	commitMemIAVLBlock(store)
 
 	require.NoError(t, store.RollbackToVersion(1))
 	require.Equal(t, int64(1), store.LastCommitID().Version)
@@ -628,7 +634,7 @@ func TestLoadLatestVersion_ChecksSCAndSSConsistency(t *testing.T) {
 
 	kv := store.GetKVStore(key)
 	kv.Set([]byte("k"), []byte("v1"))
-	store.Commit()
+	commitMemIAVLBlock(store)
 
 	sc := &rollbackTrackingSCStore{hasVersion: true, currentVersion: 1}
 	ss := &rollbackTrackingStateStore{hasVersion: true}
@@ -649,7 +655,7 @@ func TestLoadLatestVersion_ReturnsConsistencyErrors(t *testing.T) {
 
 	kv := store.GetKVStore(key)
 	kv.Set([]byte("k"), []byte("v1"))
-	store.Commit()
+	commitMemIAVLBlock(store)
 
 	sc := &rollbackTrackingSCStore{hasVersion: false, currentVersion: 0}
 	ss := &rollbackTrackingStateStore{hasVersion: false}
