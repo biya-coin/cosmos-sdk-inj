@@ -71,6 +71,7 @@ type BaseApp struct {
 	name              string                      // application name from abci.BlockInfo
 	db                dbm.DB                      // common DB backend
 	cms               storetypes.CommitMultiStore // Main (uncached) state
+	storeConfig       store.StoreConfig
 	qms               storetypes.RootMultiStore   // Optional alternative multistore for querying only.
 	storeLoader       StoreLoader                 // function to handle store loading, may be overridden with SetStoreLoader()
 	grpcQueryRouter   *GRPCQueryRouter            // router for redirecting gRPC query calls
@@ -223,6 +224,7 @@ func NewBaseApp(
 		logger:           logger,
 		name:             name,
 		db:               db,
+		storeConfig:      store.DefaultStoreConfig(),
 		cms:              store.NewCommitMultiStore(db, logger, storemetrics.NewNoOpMetrics()), // by default we use a no-op metric gather in store
 		storeLoader:      DefaultStoreLoader,
 		grpcQueryRouter:  NewGRPCQueryRouter(),
@@ -404,6 +406,10 @@ func DefaultStoreLoader(ms storetypes.CommitMultiStore) error {
 // UNSAFE: must not be used during the abci life cycle.
 func (app *BaseApp) CommitMultiStore() storetypes.CommitMultiStore {
 	return app.cms
+}
+
+func (app *BaseApp) StoreConfig() store.StoreConfig {
+	return app.storeConfig
 }
 
 // SnapshotManager returns the snapshot manager.

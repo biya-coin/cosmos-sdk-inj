@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/viper"
 
+	"cosmossdk.io/store/seidb/sc/memiavl"
 	pruningtypes "cosmossdk.io/store/pruning/types"
 
 	"github.com/cosmos/cosmos-sdk/telemetry"
@@ -194,6 +195,7 @@ type Config struct {
 	StateSync StateSyncConfig  `mapstructure:"state-sync"`
 	Streaming StreamingConfig  `mapstructure:"streaming"`
 	Mempool   MempoolConfig    `mapstructure:"mempool"`
+	MemIAVL   memiavl.Config   `mapstructure:"memiavl"`
 }
 
 // SetMinGasPrices sets the validator's minimum gas prices.
@@ -265,6 +267,7 @@ func DefaultConfig() *Config {
 		Mempool: MempoolConfig{
 			MaxTxs: -1,
 		},
+		MemIAVL: memiavl.DefaultConfig(),
 	}
 }
 

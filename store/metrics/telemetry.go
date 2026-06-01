@@ -9,6 +9,9 @@ import (
 // StoreMetrics defines the set of metrics for the store package
 type StoreMetrics interface {
 	MeasureSince(keys ...string)
+	MeasureSinceFrom(start time.Time, keys ...string)
+	SetGauge(val float32, keys ...string)
+	IncrCounter(val float32, keys ...string)
 }
 
 var (
@@ -44,6 +47,21 @@ func (m Metrics) MeasureSince(keys ...string) {
 	metrics.MeasureSinceWithLabels(keys, start.UTC(), m.Labels)
 }
 
+// MeasureSinceFrom emits duration from a provided start timestamp.
+func (m Metrics) MeasureSinceFrom(start time.Time, keys ...string) {
+	metrics.MeasureSinceWithLabels(keys, start.UTC(), m.Labels)
+}
+
+// SetGauge emits a gauge metric with global labels (if any).
+func (m Metrics) SetGauge(val float32, keys ...string) {
+	metrics.SetGaugeWithLabels(keys, val, m.Labels)
+}
+
+// IncrCounter emits a counter metric with global labels (if any).
+func (m Metrics) IncrCounter(val float32, keys ...string) {
+	metrics.IncrCounterWithLabels(keys, val, m.Labels)
+}
+
 // NoOpMetrics is a no-op implementation of the StoreMetrics interface
 type NoOpMetrics struct{}
 
@@ -54,3 +72,12 @@ func NewNoOpMetrics() NoOpMetrics {
 
 // MeasureSince is a no-op implementation of the StoreMetrics interface to avoid time.Now() calls
 func (m NoOpMetrics) MeasureSince(keys ...string) {}
+
+// MeasureSinceFrom is a no-op implementation of the StoreMetrics interface.
+func (m NoOpMetrics) MeasureSinceFrom(start time.Time, keys ...string) {}
+
+// SetGauge is a no-op implementation of the StoreMetrics interface.
+func (m NoOpMetrics) SetGauge(val float32, keys ...string) {}
+
+// IncrCounter is a no-op implementation of the StoreMetrics interface.
+func (m NoOpMetrics) IncrCounter(val float32, keys ...string) {}
