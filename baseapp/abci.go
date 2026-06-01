@@ -1075,6 +1075,8 @@ func (app *BaseApp) Commit() (*abci.CommitResponse, error) {
 	app.snapshotManager.SnapshotIfApplicable(header.Height)
 	totalCommitMs := float64(time.Since(commitStart).Nanoseconds()) / 1e6
 	fmt.Printf("msg=baseapp_commit_timing height=%d total_ms=%.3f cms_commit_ms=%.3f\n", header.Height, totalCommitMs, commitStoreMs)
+	app.perfMetrics.BaseAppCommitStepSeconds.With("step", "total").Observe(totalCommitMs / 1000)
+	app.perfMetrics.BaseAppCommitStepSeconds.With("step", "cms_commit").Observe(commitStoreMs / 1000)
 
 	return resp, nil
 }

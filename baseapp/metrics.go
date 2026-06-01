@@ -16,10 +16,16 @@ package baseapp
 //	app.metrics = NopMetrics()                  // otherwise
 
 import (
+	"sync"
+
 	cmtmetrics "github.com/cometbft/cometbft/libs/metrics"
-	"github.com/cometbft/cometbft/libs/metrics/discard"
 	prommetrics "github.com/cometbft/cometbft/libs/metrics/prometheus"
 	stdprometheus "github.com/prometheus/client_golang/prometheus"
+)
+
+var (
+	globalPerfMetrics     *perfMetrics
+	globalPerfMetricsOnce sync.Once
 )
 
 const metricsSubsystem = "baseapp"
@@ -45,12 +51,19 @@ type perfMetrics struct {
 	// 对应 Loki msg=app_finalize_block
 	// Labels: step = total | oe_wait | internal_exec | working_hash
 	FinalizeBlockStepSeconds cmtmetrics.Histogram
+
+	// ── BaseApp Commit 子步骤（秒） ──────────────────────────────────────
+	// 对应 Loki msg=baseapp_commit_timing
+	// Labels: step = total | cms_commit
+	BaseAppCommitStepSeconds cmtmetrics.Histogram
 }
 
-// PrometheusMetrics constructs a perfMetrics backed by real Prometheus
+// newPrometheusMetrics constructs a perfMetrics backed by real Prometheus
 // collectors registered under the given namespace (e.g. "cosmos" or "biyachain").
+// It is safe to call multiple times; metrics are registered only once.
 func newPrometheusMetrics(namespace string) *perfMetrics {
-	return &perfMetrics{
+	globalPerfMetricsOnce.Do(func() {
+		globalPerfMetrics = &perfMetrics{
 		PrepareProposalStepSeconds: prommetrics.NewHistogramFrom(stdprometheus.HistogramOpts{
 			Namespace: namespace,
 			Subsystem: metricsSubsystem,
@@ -82,16 +95,16 @@ func newPrometheusMetrics(namespace string) *perfMetrics {
 			Help:      "Sub-step durations inside FinalizeBlock (OE path and non-OE path).",
 			Buckets:   []float64{0.1, 0.5, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 15},
 		}, []string{"step"}),
+
+		BaseAppCommitStepSeconds: prommetrics.NewHistogramFrom(stdprometheus.HistogramOpts{
+			Namespace: namespace,
+			Subsystem: "baseapp_commit",
+			Name:      "step_seconds",
+			Help:      "BaseApp Commit sub-step durations (total / cms_commit).",
+			Buckets:   []float64{0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 1, 1.5, 2},
+		}, []string{"step"}),
 	}
+	})
+	return globalPerfMetrics
 }
 
-// newNopMetrics returns a perfMetrics whose every Observe call is a no-op.
-// Used when prometheus is disabled in config.toml.
-func newNopMetrics() *perfMetrics {
-	return &perfMetrics{
-		PrepareProposalStepSeconds:       discard.NewHistogram(),
-		InternalFinalizeBlockStepSeconds: discard.NewHistogram(),
-		ExecuteTxsStepSeconds:            discard.NewHistogram(),
-		FinalizeBlockStepSeconds:         discard.NewHistogram(),
-	}
-}

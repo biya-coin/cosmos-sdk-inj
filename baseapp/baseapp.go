@@ -265,7 +265,7 @@ func NewBaseApp(
 	app.runTxRecoveryMiddleware = newDefaultRecoveryMiddleware()
 
 	if app.perfMetrics == nil {
-		app.perfMetrics = newNopMetrics()
+		app.perfMetrics = newPrometheusMetrics("biyachain")
 	}
 
 	// Initialize with an empty interface registry to avoid nil pointer dereference.
