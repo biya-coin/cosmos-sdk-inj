@@ -595,25 +595,41 @@ func GetStoreConfig(appOpts types.AppOptions) store.StoreConfig {
 	if scBackend := cast.ToString(appOpts.Get(FlagSeiDBSCBackend)); scBackend != "" {
 		cfg.SeiDB.StateCommitmentBackend = scBackend
 	}
-	if v := appOpts.Get(FlagSeiDBSSBackend); v != nil {
-		if backend := cast.ToString(v); backend != "" {
-			cfg.SeiDB.StateStoreBackend = backend
-		}
+	ssEnabled := true
+	if v := appOpts.Get(FlagSeiDBSSEnable); v != nil {
+		ssEnabled = cast.ToBool(v)
 	}
-	if v := appOpts.Get(FlagSeiDBSSAsyncWriteBuffer); v != nil {
+	if ssEnabled {
+		if v := appOpts.Get(FlagSeiDBSSBackend); v != nil {
+			if backend := cast.ToString(v); backend != "" {
+				cfg.SeiDB.StateStoreBackend = backend
+			}
+		}
+	} else {
+		cfg.SeiDB.StateStoreBackend = ""
+		cfg.SeiDB.StateStoreAsyncWriteBuffer = 0
+		cfg.SeiDB.StateStoreWriteMode = ""
+		cfg.SeiDB.StateStoreReadMode = ""
+		cfg.SeiDB.StateStoreEVMDBDirectory = ""
+	}
+	if ssEnabled && appOpts.Get(FlagSeiDBSSAsyncWriteBuffer) != nil {
+		v := appOpts.Get(FlagSeiDBSSAsyncWriteBuffer)
 		cfg.SeiDB.StateStoreAsyncWriteBuffer = cast.ToInt(v)
 	}
-	if v := appOpts.Get(FlagSeiDBSSWriteMode); v != nil {
+	if ssEnabled && appOpts.Get(FlagSeiDBSSWriteMode) != nil {
+		v := appOpts.Get(FlagSeiDBSSWriteMode)
 		if mode := cast.ToString(v); mode != "" {
 			cfg.SeiDB.StateStoreWriteMode = mode
 		}
 	}
-	if v := appOpts.Get(FlagSeiDBSSReadMode); v != nil {
+	if ssEnabled && appOpts.Get(FlagSeiDBSSReadMode) != nil {
+		v := appOpts.Get(FlagSeiDBSSReadMode)
 		if mode := cast.ToString(v); mode != "" {
 			cfg.SeiDB.StateStoreReadMode = mode
 		}
 	}
-	if v := appOpts.Get(FlagSeiDBSSEVMDBDirectory); v != nil {
+	if ssEnabled && appOpts.Get(FlagSeiDBSSEVMDBDirectory) != nil {
+		v := appOpts.Get(FlagSeiDBSSEVMDBDirectory)
 		cfg.SeiDB.StateStoreEVMDBDirectory = cast.ToString(v)
 	}
 	if v := appOpts.Get(FlagSeiDBKeepRecent); v != nil {

@@ -35,6 +35,7 @@ require (
 	github.com/gogo/protobuf v1.3.2
 	github.com/ledgerwatch/erigon-lib v1.0.0
 	github.com/pkg/errors v0.9.1
+	github.com/prometheus/client_golang v1.21.1
 	github.com/tidwall/gjson v1.19.0
 	github.com/tidwall/wal v1.2.1
 	github.com/zbiljic/go-filelock v0.0.0-20170914061330-1dbf7103ab7d
@@ -81,7 +82,6 @@ require (
 	github.com/oklog/run v1.1.0 // indirect
 	github.com/petermattis/goid v0.0.0-20240813172612-4fcff4a6cae7 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
-	github.com/prometheus/client_golang v1.21.1 // indirect
 	github.com/prometheus/client_model v0.6.1 // indirect
 	github.com/prometheus/common v0.62.0 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect
