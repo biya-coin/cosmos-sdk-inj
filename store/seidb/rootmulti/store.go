@@ -135,8 +135,11 @@ func (s *Store) WorkingHash() []byte {
 		s.mtx.RLock()
 		defer s.mtx.RUnlock()
 		if src, ok := s.scStore.(*memIAVLStore); ok {
+			workingCommitInfoStart := time.Now()
 			ci := amendCommitInfo(convertCommitInfo(src.WorkingCommitInfo()), s.storesParams)
-			return ci.Hash()
+			hash := ci.Hash()
+			monitor.LogSeidbWorkingHashTiming(s.lastCommitInfo.Version, float64(time.Since(workingCommitInfoStart).Nanoseconds())/1e6)
+			return hash
 		}
 		return nil
 	}
@@ -1060,7 +1063,13 @@ func (s *Store) flush() error {
 
 	s.scOpMtx.Lock()
 	defer s.scOpMtx.Unlock()
-	return s.scStore.ApplyChangeSets(changeSets)
+	scFlushStart := time.Now()
+	err := s.scStore.ApplyChangeSets(changeSets)
+	if err != nil {
+		return fmt.Errorf("sc apply changesets at version %d: %w", currentVersion, err)
+	}
+	monitor.LogSeidbSCApplyChangeset(currentVersion, float64(time.Since(scFlushStart).Nanoseconds())/1e6)
+	return nil
 }
 
 func (s *Store) popPendingChangeSets() []*NamedChangeSet {
