@@ -17,8 +17,8 @@ github.com/beorn7/perks v0.0.0-20180321164747-3a771d992973/go.mod h1:Dwedo/Wpr24
 github.com/beorn7/perks v1.0.0/go.mod h1:KWe93zE9D1o94FZ5RNwFwVgaQK1VOXiVxmqh+CedLV8=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
-github.com/biya-coin/cometbft v1.0.2-0.20260528031915-f75046678e96 h1:LtenaqSqcgCZMAd3621nrr1IldKIBEA0C4uIonVbEz8=
-github.com/biya-coin/cometbft v1.0.2-0.20260528031915-f75046678e96/go.mod h1:RgHHndb7wdtm9etmVj4tDn1NynC9YKIEJW9UUI3FCn4=
+github.com/biya-coin/cometbft v1.0.2-0.20260602044617-c8382082575c h1:nB93mQLXV+BxUc+6e0mabERyTgi9XRmV/uqeklvUx7M=
+github.com/biya-coin/cometbft v1.0.2-0.20260602044617-c8382082575c/go.mod h1:RgHHndb7wdtm9etmVj4tDn1NynC9YKIEJW9UUI3FCn4=
 github.com/biya-coin/cometbft/api v1.0.0-inj.2 h1:LVOVSb/1/X87oEkYMruPdECrkhFV7zi72agMmLowD7E=
 github.com/biya-coin/cometbft/api v1.0.0-inj.2/go.mod h1:Ivh6nSCTJPQOyfQo8dgnyu/T88it092sEqSrZSmTQN8=
 github.com/btcsuite/btcd/btcutil v1.1.6 h1:zFL2+c3Lb9gEgqKNzowKUPQNb8jV7v5Oaodi/AYFd6c=
