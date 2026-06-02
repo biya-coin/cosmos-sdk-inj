@@ -47,6 +47,23 @@ func TestGetStoreConfig_SeiDBEnabled(t *testing.T) {
 	require.Equal(t, uint64(42), cfg.SeiDB.KeepRecent)
 }
 
+func TestGetStoreConfig_SeiDBSSEnableFalse(t *testing.T) {
+	v := viper.New()
+	v.Set(FlagSeiDBEnabled, true)
+	v.Set(FlagSeiDBHome, "/tmp/seidb")
+	v.Set(FlagSeiDBSSEnable, false)
+	v.Set(FlagSeiDBSSBackend, "pebbledb")
+	v.Set(FlagSeiDBSSAsyncWriteBuffer, 100)
+
+	cfg := GetStoreConfig(v)
+
+	require.True(t, cfg.SeiDB.Enabled)
+	require.Equal(t, "", cfg.SeiDB.StateStoreBackend)
+	require.Equal(t, 0, cfg.SeiDB.StateStoreAsyncWriteBuffer)
+	require.Equal(t, "", cfg.SeiDB.StateStoreWriteMode)
+	require.Equal(t, "", cfg.SeiDB.StateStoreReadMode)
+}
+
 func TestGetStoreConfig_MemiAVLEnable(t *testing.T) {
 	v := viper.New()
 	v.Set(store.MemIAVLOptionEnable, true)

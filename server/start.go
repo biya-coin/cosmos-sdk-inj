@@ -81,6 +81,7 @@ const (
 		FlagSeiDBEnabled        = "seidb.enabled"
 		FlagSeiDBHome           = "seidb.home"
 		FlagSeiDBSCBackend      = "seidb.sc-backend"
+		FlagSeiDBSSEnable       = "seidb.ss-enable"
 		FlagSeiDBSSBackend      = "seidb.ss-backend"
 		FlagSeiDBSSAsyncWriteBuffer = "seidb.ss-async-write-buffer"
 		FlagSeiDBSSWriteMode    = "seidb.ss-write-mode"
@@ -1052,6 +1053,7 @@ func addStartNodeFlags(cmd *cobra.Command, opts StartCmdOptions) {
 		cmd.Flags().Bool(FlagSeiDBEnabled, false, "Enable the SeiDB storage skeleton path")
 		cmd.Flags().String(FlagSeiDBHome, "", "Home directory for SeiDB state")
 		cmd.Flags().String(FlagSeiDBSCBackend, "memiavl", "SeiDB state commitment backend")
+		cmd.Flags().Bool(FlagSeiDBSSEnable, true, "Enable the SeiDB state store layer")
 		cmd.Flags().String(FlagSeiDBSSBackend, "pebbledb", "SeiDB state store backend")
 		cmd.Flags().Int(FlagSeiDBSSAsyncWriteBuffer, 100, "SeiDB SS async write buffer size (<=0 means sync write)")
 		cmd.Flags().String(FlagSeiDBSSWriteMode, "cosmos_only", "SeiDB SS write mode (cosmos_only|dual_write|split_write)")
