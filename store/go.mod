@@ -103,7 +103,6 @@ require (
 )
 
 replace (
-	// Use CometBFT v1.0.1 with Mempool lanes and DOG
-	github.com/cometbft/cometbft => github.com/biya-coin/cometbft v1.0.2-0.20260528031915-f75046678e96
+	github.com/cometbft/cometbft => github.com/biya-coin/cometbft v1.0.2-0.20260602044617-c8382082575c
 	github.com/cometbft/cometbft/api => github.com/biya-coin/cometbft/api v1.0.0-inj.2
 )
