@@ -6,109 +6,71 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/tidwall/wal"
+	lws "chainmaker.org/chainmaker/lws"
 
 	"cosmossdk.io/store/seidb/sc/common/threading"
 )
 
-// The size of internal channel buffers if the provided buffer size is less than 1.
 const defaultBufferSize = 1024
 
-// The size of write batches if the provided write batch size is less than 1.
-const defaultWriteBatchSize = 64
-
-// WAL is a generic write-ahead log implementation.
 type WAL[T any] struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
 	dir       string
-	log       *wal.Log
+	log       *lws.Lws
 	config    Config
 	marshal   MarshalFn[T]
 	unmarshal UnmarshalFn[T]
 
-	// The size of write batches.
-	writeBatchSize int
-	asyncWrites    bool
+	asyncWrites bool
 
 	writeChan    chan *writeRequest[T]
 	truncateChan chan *truncateRequest
 	closeReqChan chan struct{}
 	closeErrChan chan error
 
-	// If we encounter an error on the worker goroutine, we tear down the WAL and set this error pointer to the error.
-	// This is to accommodate callers who are running in async mode and don't wait for the
-	// success/failure of individual writes.
 	asyncError atomic.Pointer[error]
+
+	mu sync.RWMutex
 }
 
-// A request to truncate the log.
+type truncater interface {
+	TruncateBefore(index uint64) error
+	TruncateAfter(index uint64) error
+}
+
 type truncateRequest struct {
-	// If true, truncate before the provided index. Otherwise, truncate after the provided index.
-	before bool
-	// The index to truncate at.
-	index uint64
-	// Errors are returned over this channel, nil is written if completed with no error
+	before  bool
+	index   uint64
 	errChan chan error
 }
 
-// A request to write to the WAL.
 type writeRequest[T any] struct {
-	// The data to write
-	entry T
-	// Errors are returned over this channel, nil is written if completed with no error
+	entry   T
 	errChan chan error
 }
 
-// Configuration for the WAL.
 type Config struct {
-	// The number of recent entries to keep in the log.
 	KeepRecent uint64
 
-	// The interval at which to prune the log.
 	PruneInterval time.Duration
 
-	// The size of internal buffers. Also controls whether or not the Write method is asynchronous.
-	//
-	// If BufferSize is greater than 0, then the Write method is asynchronous, and the size of internal
-	// buffers is set to the provided value. If Buffer size is less than 1, then the Write method is synchronous,
-	// and any internal buffers are set to a default size.
 	WriteBufferSize int
 
-	// The size of write batches. If less than or equal to 0, a default of 64 is used.
-	// If 1, no batching is done.
 	WriteBatchSize int
 
-	// If true, do an fsync after each write.
 	FsyncEnabled bool
 
-	// If true, make a deep copy of the data for every write. If false, then it is not safe to modify the data after
-	// reading/writing it.
 	DeepCopyEnabled bool
 
-	// AllowEmpty permits removing all entries via TruncateAll.
-	// When false (default), at least one entry must remain after truncation.
 	AllowEmpty bool
 }
 
-// NewWAL creates a new generic write-ahead log that persists entries.
-// marshal and unmarshal functions are used to serialize/deserialize entries.
-// Example:
-//
-//	NewWAL(
-//	    func(e proto.ChangelogEntry) ([]byte, error) { return e.Marshal() },
-//	    func(data []byte) (proto.ChangelogEntry, error) {
-//	        var e proto.ChangelogEntry
-//	        err := e.Unmarshal(data)
-//	        return e, err
-//	    },
-//	    logger, dir, config,
-//	)
 func NewWAL[T any](
 	ctx context.Context,
 	marshal MarshalFn[T],
@@ -116,66 +78,47 @@ func NewWAL[T any](
 	dir string,
 	config Config,
 ) (*WAL[T], error) {
-	log, err := open(dir, &wal.Options{
-		NoSync:     !config.FsyncEnabled,
-		NoCopy:     !config.DeepCopyEnabled,
-		AllowEmpty: config.AllowEmpty,
-	})
+	log, err := open(dir, config)
 	if err != nil {
 		return nil, err
 	}
 
 	bufferSize := config.WriteBufferSize
-	if config.WriteBufferSize <= 0 {
+	if bufferSize <= 0 {
 		bufferSize = defaultBufferSize
 	}
 
 	asyncWrites := config.WriteBufferSize > 0
 
-	writeBatchSize := config.WriteBatchSize
-	if writeBatchSize <= 0 {
-		writeBatchSize = defaultWriteBatchSize
-	}
-
 	ctx, cancel := context.WithCancel(ctx)
 
 	w := &WAL[T]{
-		ctx:            ctx,
-		cancel:         cancel,
-		dir:            dir,
-		log:            log,
-		config:         config,
-		marshal:        marshal,
-		unmarshal:      unmarshal,
-		writeBatchSize: writeBatchSize,
-		asyncWrites:    asyncWrites,
-		closeReqChan:   make(chan struct{}),
-		closeErrChan:   make(chan error, 1),
-		writeChan:      make(chan *writeRequest[T], bufferSize),
-		truncateChan:   make(chan *truncateRequest, bufferSize),
+		ctx:          ctx,
+		cancel:       cancel,
+		dir:          dir,
+		log:          log,
+		config:       config,
+		marshal:      marshal,
+		unmarshal:    unmarshal,
+		asyncWrites:  asyncWrites,
+		closeReqChan: make(chan struct{}),
+		closeErrChan: make(chan error, 1),
+		writeChan:    make(chan *writeRequest[T], bufferSize),
+		truncateChan: make(chan *truncateRequest, bufferSize),
 	}
 
 	go w.mainLoop()
-
 	return w, nil
-
 }
 
-// Write will append a new entry to the end of the log.
-// Whether the writes is in blocking or async manner depends on the buffer size.
-// For async writes, this also checks for any previous async write errors.
 func (walLog *WAL[T]) Write(entry T) error {
-
 	backgroundErr := walLog.asyncError.Load()
 	if backgroundErr != nil {
 		return fmt.Errorf("WAL encountered an error and is now shut down: %w", *backgroundErr)
 	}
 
 	errChan := make(chan error, 1)
-	req := &writeRequest[T]{
-		entry:   entry,
-		errChan: errChan,
-	}
+	req := &writeRequest[T]{entry: entry, errChan: errChan}
 
 	err := threading.InterruptiblePush(walLog.ctx, walLog.writeChan, req)
 	if err != nil {
@@ -183,7 +126,6 @@ func (walLog *WAL[T]) Write(entry T) error {
 	}
 
 	if walLog.asyncWrites {
-		// Do not wait for the write to be durable
 		return nil
 	}
 
@@ -198,139 +140,51 @@ func (walLog *WAL[T]) Write(entry T) error {
 	return nil
 }
 
-// reportFatalError records a fatal error and shuts down the WAL. err is the fatal error to report and store.
-// chanErr, if non-nil, is used to notify the caller of the request that triggered the error.
 func (walLog *WAL[T]) reportFatalError(err error, chanErr chan error) {
 	if chanErr != nil {
 		chanErr <- err
 	}
-	// Store on heap so the pointer remains valid after this function returns.
 	p := new(error)
 	*p = err
 	walLog.asyncError.Store(p)
 }
 
-// This method is called asynchronously in response to a call to Write.
 func (walLog *WAL[T]) handleWrite(req *writeRequest[T]) {
-	if walLog.writeBatchSize <= 1 {
-		walLog.handleUnbatchedWrite(req)
-	} else {
-		walLog.handleBatchedWrite(req)
-	}
-}
-
-// handleUnbatchedWrite is called when no batching is enabled. Processes a single write request.
-func (walLog *WAL[T]) handleUnbatchedWrite(req *writeRequest[T]) {
-
 	bz, err := walLog.marshal(req.entry)
 	if err != nil {
-		err = fmt.Errorf("marshalling error: %w", err)
-		walLog.reportFatalError(err, req.errChan)
+		walLog.reportFatalError(fmt.Errorf("marshalling error: %w", err), req.errChan)
 		return
 	}
-	lastOffset, err := walLog.log.LastIndex()
+
+	walLog.mu.Lock()
+	_, err = walLog.log.WriteBytes(bz)
+	walLog.mu.Unlock()
 	if err != nil {
-		err = fmt.Errorf("error fetching last index: %w", err)
-		walLog.reportFatalError(err, req.errChan)
+		walLog.reportFatalError(fmt.Errorf("failed to write: %w", err), req.errChan)
 		return
 	}
-	if err := walLog.log.Write(lastOffset+1, bz); err != nil {
-		err = fmt.Errorf("failed to write: %w", err)
-		walLog.reportFatalError(err, req.errChan)
-		return
+
+	if !walLog.asyncWrites && walLog.config.FsyncEnabled {
+		walLog.mu.Lock()
+		err = walLog.log.Flush()
+		walLog.mu.Unlock()
+		if err != nil {
+			walLog.reportFatalError(fmt.Errorf("failed to flush: %w", err), req.errChan)
+			return
+		}
 	}
 
 	req.errChan <- nil
 }
 
-// handleBatchedWrite is called when batching is enabled. This method may pop pending writes from the writeChan and
-// include them in the batch.
-func (walLog *WAL[T]) handleBatchedWrite(req *writeRequest[T]) {
-
-	requests := walLog.gatherRequestsForBatch(req)
-
-	lastOffset, err := walLog.log.LastIndex()
-	if err != nil {
-		err = fmt.Errorf("error fetching last index: %w", err)
-		for _, req := range requests {
-			req.errChan <- err
-		}
-		walLog.reportFatalError(err, nil)
-		return
-	}
-
-	batch := &wal.Batch{}
-	for i, req := range requests {
-		bz, err := walLog.marshal(req.entry)
-
-		if err != nil {
-			err = fmt.Errorf("marshalling error: %w", err)
-			altErr := fmt.Errorf("another request failed to marshal, WAL is shutting down")
-			for j, r := range requests {
-				if i == j {
-					r.errChan <- err
-				} else {
-					r.errChan <- altErr
-				}
-			}
-			walLog.reportFatalError(err, nil)
-			return
-		}
-
-		batch.Write(lastOffset+1, bz)
-		lastOffset++
-	}
-
-	if err := walLog.log.WriteBatch(batch); err != nil {
-		err = fmt.Errorf("failed to write batch: %w", err)
-		for _, r := range requests {
-			if r.errChan != nil {
-				r.errChan <- err
-			}
-		}
-		walLog.reportFatalError(err, nil)
-		return
-	}
-
-	for _, r := range requests {
-		if r.errChan != nil {
-			r.errChan <- nil
-		}
-	}
-}
-
-// Gather the requests for a batch. When this method is called, we will already have the first request in the batch.
-func (walLog *WAL[T]) gatherRequestsForBatch(initialRequest *writeRequest[T]) []*writeRequest[T] {
-	requests := make([]*writeRequest[T], 0)
-	requests = append(requests, initialRequest)
-
-	keepLooking := true
-	for keepLooking && len(requests) < walLog.writeBatchSize {
-		select {
-		case next := <-walLog.writeChan:
-			requests = append(requests, next)
-		default:
-			// No more pending writes immediately available, so process the batch we have so far.
-			keepLooking = false
-		}
-	}
-
-	return requests
-}
-
-// TruncateAfter will remove all entries that are after the provided `index`.
-// In other words the entry at `index` becomes the last entry in the log.
 func (walLog *WAL[T]) TruncateAfter(index uint64) error {
 	backgroundErr := walLog.asyncError.Load()
 	if backgroundErr != nil {
 		return fmt.Errorf("WAL encountered an error and is now shut down: %w", *backgroundErr)
 	}
-
 	return walLog.sendTruncate(false, index)
 }
 
-// TruncateBefore will remove all entries that are before the provided `index`.
-// In other words the entry at `index` becomes the first entry in the log.
 func (walLog *WAL[T]) TruncateBefore(index uint64) error {
 	backgroundErr := walLog.asyncError.Load()
 	if backgroundErr != nil {
@@ -339,8 +193,6 @@ func (walLog *WAL[T]) TruncateBefore(index uint64) error {
 	return walLog.sendTruncate(true, index)
 }
 
-// TruncateAll removes every entry from the log.
-// Requires AllowEmpty to be set in Config; returns an error otherwise.
 func (walLog *WAL[T]) TruncateAll() error {
 	backgroundErr := walLog.asyncError.Load()
 	if backgroundErr != nil {
@@ -355,12 +207,11 @@ func (walLog *WAL[T]) TruncateAll() error {
 		return err
 	}
 	if first == 0 && last == 0 {
-		return nil // already empty
+		return nil
 	}
 	return walLog.sendTruncate(true, last+1)
 }
 
-// sendTruncate sends a truncate request to the main loop and waits for completion.
 func (walLog *WAL[T]) sendTruncate(before bool, index uint64) error {
 	req := &truncateRequest{
 		before:  before,
@@ -380,24 +231,18 @@ func (walLog *WAL[T]) sendTruncate(before bool, index uint64) error {
 	if err != nil {
 		return fmt.Errorf("failed to truncate: %w", err)
 	}
-
 	return nil
 }
 
-// handleTruncate runs on the main loop and performs the truncation.
-// "Out of range" truncate errors (e.g. empty log or invalid index) are reported to the caller
-// but are not fatal; the WAL continues operating so callers can treat them as benign.
 func (walLog *WAL[T]) handleTruncate(req *truncateRequest) {
 	var err error
 	if req.before {
-		err = walLog.log.TruncateFront(req.index)
+		err = walLog.truncateBefore(req.index)
 	} else {
-		err = walLog.log.TruncateBack(req.index)
+		err = walLog.truncateAfter(req.index)
 	}
 	if err != nil {
-		err = fmt.Errorf("failed to truncate: %w", err)
-		if strings.Contains(err.Error(), "out of range") {
-			err = fmt.Errorf("out of range truncate error: %w", err)
+		if errors.Is(err, os.ErrNotExist) {
 			req.errChan <- err
 			return
 		}
@@ -407,72 +252,188 @@ func (walLog *WAL[T]) handleTruncate(req *truncateRequest) {
 	req.errChan <- nil
 }
 
+func (walLog *WAL[T]) truncateBefore(index uint64) error {
+	if t, ok := any(walLog.log).(truncater); ok {
+		return t.TruncateBefore(index)
+	}
+	return walLog.rewrite(index, 0)
+}
+
+func (walLog *WAL[T]) truncateAfter(index uint64) error {
+	if t, ok := any(walLog.log).(truncater); ok {
+		return t.TruncateAfter(index)
+	}
+	return walLog.rewrite(0, index)
+}
+
+func (walLog *WAL[T]) rewrite(startKeep, endKeep uint64) error {
+	walLog.mu.Lock()
+	defer walLog.mu.Unlock()
+
+	first, _ := walLog.firstOffsetLocked()
+	last, _ := walLog.lastOffsetLocked()
+	if first == 0 || last == 0 || first > last {
+		return nil
+	}
+
+	var entries [][]byte
+	var keepStart, keepEnd uint64
+	switch {
+	case startKeep > 0:
+		if startKeep > last+1 {
+			startKeep = last + 1
+		}
+		keepStart, keepEnd = startKeep, last
+	case endKeep >= first:
+		keepStart, keepEnd = first, endKeep
+	default:
+		keepStart, keepEnd = 0, 0
+	}
+
+	if keepStart > 0 && keepStart <= keepEnd {
+		it := walLog.log.NewLogIterator()
+		defer it.Release()
+		it.SkipToFirst()
+		for it.HasNext() {
+			elem := it.Next()
+			if elem.Index() < keepStart {
+				continue
+			}
+			if elem.Index() > keepEnd {
+				break
+			}
+			data, err := elem.Get()
+			if err != nil {
+				return err
+			}
+			copyBz := make([]byte, len(data))
+			copy(copyBz, data)
+			entries = append(entries, copyBz)
+		}
+	}
+
+	walLog.log.Close()
+	if err := os.RemoveAll(walLog.dir); err != nil {
+		return err
+	}
+	log, err := open(walLog.dir, walLog.config)
+	if err != nil {
+		return err
+	}
+	walLog.log = log
+
+	for _, bz := range entries {
+		if _, err := walLog.log.WriteBytes(bz); err != nil {
+			return err
+		}
+	}
+	if walLog.config.FsyncEnabled {
+		return walLog.log.Flush()
+	}
+	return nil
+}
+
 func (walLog *WAL[T]) FirstOffset() (uint64, error) {
 	backgroundErr := walLog.asyncError.Load()
 	if backgroundErr != nil {
 		return 0, fmt.Errorf("WAL encountered an error and is now shut down: %w", *backgroundErr)
 	}
-
-	val, err := walLog.log.FirstIndex()
-	if err != nil {
-		return 0, fmt.Errorf("failed to get first offset: %w", err)
-	}
-	return val, nil
+	walLog.mu.RLock()
+	defer walLog.mu.RUnlock()
+	return walLog.firstOffsetLocked()
 }
 
-// LastOffset returns the last written offset/index of the log.
+func (walLog *WAL[T]) firstOffsetLocked() (uint64, error) {
+	it := walLog.log.NewLogIterator()
+	defer it.Release()
+	it.SkipToFirst()
+	if !it.HasNext() {
+		return 0, nil
+	}
+	return it.Next().Index(), nil
+}
+
 func (walLog *WAL[T]) LastOffset() (uint64, error) {
 	backgroundErr := walLog.asyncError.Load()
 	if backgroundErr != nil {
 		return 0, fmt.Errorf("WAL encountered an error and is now shut down: %w", *backgroundErr)
 	}
-
-	val, err := walLog.log.LastIndex()
-	if err != nil {
-		return 0, fmt.Errorf("failed to get last offset: %w", err)
-	}
-	return val, nil
+	walLog.mu.RLock()
+	defer walLog.mu.RUnlock()
+	return walLog.lastOffsetLocked()
 }
 
-// ReadAt will read the log entry at the provided index.
+func (walLog *WAL[T]) lastOffsetLocked() (uint64, error) {
+	it := walLog.log.NewLogIterator()
+	defer it.Release()
+	it.SkipToLast()
+	if !it.HasPre() {
+		return 0, nil
+	}
+	return it.Previous().Index(), nil
+}
+
 func (walLog *WAL[T]) ReadAt(index uint64) (T, error) {
 	var zero T
-
 	backgroundErr := walLog.asyncError.Load()
 	if backgroundErr != nil {
 		return zero, fmt.Errorf("WAL encountered an error and is now shut down: %w", *backgroundErr)
 	}
 
-	bz, err := walLog.log.Read(index)
-	if err != nil {
-		return zero, fmt.Errorf("read log failed, %w", err)
+	walLog.mu.RLock()
+	defer walLog.mu.RUnlock()
+	it := walLog.log.NewLogIterator()
+	defer it.Release()
+	it.SkipToFirst()
+	for it.HasNext() {
+		elem := it.Next()
+		if elem.Index() == index {
+			bz, err := elem.Get()
+			if err != nil {
+				return zero, fmt.Errorf("read log failed, %w", err)
+			}
+			entry, err := walLog.unmarshal(bz)
+			if err != nil {
+				return zero, fmt.Errorf("unmarshal log failed, %w", err)
+			}
+			return entry, nil
+		}
+		if elem.Index() > index {
+			break
+		}
 	}
-	entry, err := walLog.unmarshal(bz)
-	if err != nil {
-		return zero, fmt.Errorf("unmarshal log failed, %w", err)
-	}
-	return entry, nil
+	return zero, fmt.Errorf("read log failed, offset %d not found", index)
 }
 
-// Replay will read the replay log and process each log entry with the provided function.
 func (walLog *WAL[T]) Replay(start uint64, end uint64, processFn func(index uint64, entry T) error) error {
 	backgroundErr := walLog.asyncError.Load()
 	if backgroundErr != nil {
 		return fmt.Errorf("WAL encountered an error and is now shut down: %w", *backgroundErr)
 	}
 
-	for i := start; i <= end; i++ {
-		bz, err := walLog.log.Read(i)
+	walLog.mu.RLock()
+	defer walLog.mu.RUnlock()
+	it := walLog.log.NewLogIterator()
+	defer it.Release()
+	it.SkipToFirst()
+	for it.HasNext() {
+		elem := it.Next()
+		idx := elem.Index()
+		if idx < start {
+			continue
+		}
+		if idx > end {
+			break
+		}
+		bz, err := elem.Get()
 		if err != nil {
 			return fmt.Errorf("read log failed, %w", err)
 		}
 		entry, err := walLog.unmarshal(bz)
 		if err != nil {
 			return fmt.Errorf("unmarshal log failed, %w", err)
-
 		}
-		err = processFn(i, entry)
-		if err != nil {
+		if err := processFn(idx, entry); err != nil {
 			return fmt.Errorf("process log failed, %w", err)
 		}
 	}
@@ -482,36 +443,28 @@ func (walLog *WAL[T]) Replay(start uint64, end uint64, processFn func(index uint
 func (walLog *WAL[T]) prune() {
 	keepRecent := walLog.config.KeepRecent
 	if keepRecent <= 0 || walLog.config.PruneInterval <= 0 {
-		// Pruning is disabled. This is a defensive check, since
-		// this method should only be called if pruning is enabled.
 		return
 	}
 
-	lastIndex, err := walLog.log.LastIndex()
+	lastIndex, err := walLog.LastOffset()
 	if err != nil {
-		err = fmt.Errorf("failed to get last index for pruning: %w", err)
-		walLog.reportFatalError(err, nil)
+		walLog.reportFatalError(fmt.Errorf("failed to get last index for pruning: %w", err), nil)
 		return
 	}
-	firstIndex, err := walLog.log.FirstIndex()
+	firstIndex, err := walLog.FirstOffset()
 	if err != nil {
-		err = fmt.Errorf("failed to get first index for pruning: %w", err)
-		walLog.reportFatalError(err, nil)
+		walLog.reportFatalError(fmt.Errorf("failed to get first index for pruning: %w", err), nil)
 		return
 	}
 
 	if lastIndex > keepRecent && (lastIndex-keepRecent) > firstIndex {
 		prunePos := lastIndex - keepRecent
-		if err := walLog.log.TruncateFront(prunePos); err != nil {
-			err = fmt.Errorf("failed to prune changelog till index %d: %w", prunePos, err)
-			walLog.reportFatalError(err, nil)
+		if err := walLog.TruncateBefore(prunePos); err != nil {
+			walLog.reportFatalError(fmt.Errorf("failed to prune changelog till index %d: %w", prunePos, err), nil)
 		}
 	}
 }
 
-// drain processes all pending requests so in-flight work completes before shutdown.
-// When asyncError is already set, skip draining; context cancellation will unblock any waiting callers.
-// Stops processing as soon as asyncError is set to avoid overwriting the first error.
 func (walLog *WAL[T]) drain() {
 	for walLog.asyncError.Load() == nil {
 		select {
@@ -525,61 +478,56 @@ func (walLog *WAL[T]) drain() {
 	}
 }
 
-// Shut down the WAL. Sends a close request to the main loop so in-flight writes (and other work)
-// can complete before teardown. Idempotent.
 func (walLog *WAL[T]) Close() error {
 	_ = threading.InterruptiblePush(walLog.ctx, walLog.closeReqChan, struct{}{})
-	// If error is non-nil then this is not the first call to Close(), no problem since Close() is idempotent
-
 	err := <-walLog.closeErrChan
-
-	// "reload" error into channel to make Close() idempotent
 	walLog.closeErrChan <- err
-
 	if err != nil {
 		return fmt.Errorf("error encountered while shutting down: %w", err)
 	}
-
 	return nil
 }
 
-// open opens the replay log, try to truncate the corrupted tail if there's any
-func open(dir string, opts *wal.Options) (*wal.Log, error) {
-	if opts == nil {
-		opts = wal.DefaultOptions
+func open(dir string, opts Config) (*lws.Lws, error) {
+	if err := os.MkdirAll(filepath.Clean(dir), 0o755); err != nil {
+		return nil, err
 	}
-	rlog, err := wal.Open(dir, opts)
-	if errors.Is(err, wal.ErrCorrupt) {
-		// try to truncate corrupted tail
-		var fis []os.DirEntry
-		fis, err = os.ReadDir(dir)
-		if err != nil {
-			return nil, fmt.Errorf("read wal dir fail: %w", err)
-		}
-		var lastSeg string
-		for _, fi := range fis {
-			if fi.IsDir() || len(fi.Name()) < 20 {
-				continue
-			}
-			lastSeg = fi.Name()
-		}
 
-		if len(lastSeg) == 0 {
-			return nil, err
-		}
-		if err = truncateCorruptedTail(filepath.Join(dir, lastSeg), opts.LogFormat); err != nil {
-			return nil, fmt.Errorf("truncate corrupted tail fail: %w", err)
-		}
-
-		// try again
-		return wal.Open(dir, opts)
+	writeFlag := lws.WF_TIMEDFLUSH
+	flushQuota := 1000
+	switch {
+	case opts.FsyncEnabled:
+		writeFlag = lws.WF_SYNCFLUSH
+		flushQuota = 0
+	case opts.WriteBufferSize <= 0:
+		writeFlag = lws.WF_SYNCWRITE
+		flushQuota = 0
 	}
-	return rlog, err
+
+	// lws.BufferSize is the underlying file/mmap buffer size in bytes, while our
+	// Config.WriteBufferSize is the async queue length. They are not equivalent.
+	// Passing small queue sizes like 100 into lws.BufferSize can create tiny mmap
+	// windows and trigger repeated remaps or faults under large changelog entries.
+	// Let lws pick its own sensible default buffer sizing.
+	log, err := lws.Open(
+		dir,
+		lws.WithFilePrex("segment_"),
+		lws.WithFileExtension("wal"),
+		lws.WithWriteFlag(writeFlag, flushQuota),
+		// WAL append/write needs correctness first. The lws mmap buffered path is
+		// currently unstable for large changelog entries under real chain load, so
+		// use normal file writes without an internal data buffer here.
+		lws.WithBufferSize(0),
+		lws.WithWriteFileType(lws.FT_NORMAL),
+		lws.WithReadNoCopy(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	return log, nil
 }
 
-// The main loop doing work in the background.
 func (walLog *WAL[T]) mainLoop() {
-
 	var pruneChan <-chan time.Time
 	if walLog.config.PruneInterval > 0 && walLog.config.KeepRecent > 0 {
 		pruneTicker := time.NewTicker(walLog.config.PruneInterval)
@@ -604,20 +552,14 @@ func (walLog *WAL[T]) mainLoop() {
 	}
 
 	walLog.cancel()
-
-	// drain pending work, then tear down
 	walLog.drain()
 
 	var closeErr error
 	if storedErr := walLog.asyncError.Load(); storedErr != nil && *storedErr != nil {
 		closeErr = *storedErr
 	}
-	if err := walLog.log.Close(); err != nil {
-		if closeErr != nil {
-			closeErr = fmt.Errorf("shutdown due to: %w; log close also failed: %v", closeErr, err)
-		} else {
-			closeErr = err
-		}
-	}
+	walLog.mu.Lock()
+	walLog.log.Close()
+	walLog.mu.Unlock()
 	walLog.closeErrChan <- closeErr
 }

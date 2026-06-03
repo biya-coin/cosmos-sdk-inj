@@ -1,7 +1,6 @@
 package composite
 
 import (
-	"errors"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -16,7 +15,6 @@ import (
 	sstypes "cosmossdk.io/store/seidb/ss/types"
 	ssutils "cosmossdk.io/store/seidb/ss/utils"
 	"cosmossdk.io/store/types"
-	tidwallwal "github.com/tidwall/wal"
 )
 
 type compositeStateStore struct {
@@ -271,9 +269,6 @@ func recoverCompositeStateStore(changelogPath string, compositeStore *compositeS
 func replayCompositeWAL(changelogPath string, fromVersion int64, toVersion int64, handler func(entry scproto.ChangelogEntry) error) error {
 	streamHandler, err := scwal.NewChangelogWAL(changelogPath, scwal.Config{})
 	if err != nil {
-		if errors.Is(err, tidwallwal.ErrEmptyLog) {
-			return nil
-		}
 		return fmt.Errorf("failed to open WAL at %s: %w", changelogPath, err)
 	}
 	defer func() { _ = streamHandler.Close() }()

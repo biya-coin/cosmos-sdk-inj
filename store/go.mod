@@ -5,6 +5,7 @@ go 1.23.0
 toolchain go1.23.8
 
 require (
+	chainmaker.org/chainmaker/lws v0.0.0-20260602102656-1a24caa26bb4
 	cosmossdk.io/errors v1.0.0
 	cosmossdk.io/log v1.4.1
 	cosmossdk.io/math v1.4.0
@@ -36,8 +37,6 @@ require (
 	github.com/ledgerwatch/erigon-lib v1.0.0
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.21.1
-	github.com/tidwall/gjson v1.19.0
-	github.com/tidwall/wal v1.2.1
 	github.com/zbiljic/go-filelock v0.0.0-20170914061330-1dbf7103ab7d
 	go.opentelemetry.io/otel v1.34.0
 	go.opentelemetry.io/otel/metric v1.34.0
@@ -90,9 +89,6 @@ require (
 	github.com/sasha-s/go-deadlock v0.3.5 // indirect
 	github.com/supranational/blst v0.3.14 // indirect
 	github.com/syndtr/goleveldb v1.0.1-0.20220721030215-126854af5e6d // indirect
-	github.com/tidwall/match v1.1.1 // indirect
-	github.com/tidwall/pretty v1.2.0 // indirect
-	github.com/tidwall/tinylru v1.1.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/otel/trace v1.34.0 // indirect
 	golang.org/x/crypto v0.36.0 // indirect
@@ -103,6 +99,8 @@ require (
 )
 
 replace (
+	// lws (biya-coin/lws @ biyachain-wal, commit 1a24caa26bb4)
+	chainmaker.org/chainmaker/lws => github.com/biya-coin/lws v0.0.0-20260602102656-1a24caa26bb4
 	github.com/cometbft/cometbft => github.com/biya-coin/cometbft v1.0.2-0.20260602044617-c8382082575c
 	github.com/cometbft/cometbft/api => github.com/biya-coin/cometbft/api v1.0.0-inj.2
 )

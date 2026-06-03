@@ -1,16 +1,7 @@
 package wal
 
 import (
-	"bytes"
-	"encoding/binary"
-	"errors"
-	"math"
-	"os"
 	"path/filepath"
-	"unsafe"
-
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/wal"
 
 	iavl "cosmossdk.io/store/seidb/sc/sei-iavl"
 )
@@ -19,83 +10,25 @@ func LogPath(dir string) string {
 	return filepath.Join(dir, "changelog")
 }
 
-// GetLastIndex returns the last written index of the replay log
 func GetLastIndex(dir string) (index uint64, err error) {
-	rlog, err := open(dir, &wal.Options{
-		NoSync: true,
-		NoCopy: true,
-	})
+	w, err := open(dir, Config{})
 	if err != nil {
 		return 0, err
 	}
-	defer func() { _ = rlog.Close() }()
-	return rlog.LastIndex()
-}
+	defer w.Close()
 
-// truncateCorruptedTail truncates the corrupted tail
-func truncateCorruptedTail(path string, format wal.LogFormat) error {
-	data, err := os.ReadFile(filepath.Clean(path))
-	if err != nil {
-		return err
+	it := w.NewLogIterator()
+	defer it.Release()
+	it.SkipToLast()
+	if !it.HasPre() {
+		return 0, nil
 	}
-	var pos int
-	for len(data) > 0 {
-		var n int
-		if format == wal.JSON {
-			n, err = loadNextJSONEntry(data)
-		} else {
-			n, err = loadNextBinaryEntry(data)
-		}
-		if errors.Is(err, wal.ErrCorrupt) {
-			break
-		}
-		if err != nil {
-			return err
-		}
-		data = data[n:]
-		pos += n
-	}
-	if pos != len(data) {
-		return os.Truncate(path, int64(pos))
-	}
-	return nil
-}
-
-// loadNextJSONEntry loads json data like {"index":number,"data":string}
-func loadNextJSONEntry(data []byte) (n int, err error) {
-	idx := bytes.IndexByte(data, '\n')
-	if idx == -1 {
-		return 0, wal.ErrCorrupt
-	}
-	line := data[:idx]
-	dres := gjson.Get(*(*string)(unsafe.Pointer(&line)), "data") //nolint:gosec
-	if dres.Type != gjson.String {
-		return 0, wal.ErrCorrupt
-	}
-	return idx + 1, nil
-}
-
-// loadNextBinaryEntry loads binary data like data_size + data
-func loadNextBinaryEntry(data []byte) (n int, err error) {
-	s, n := binary.Uvarint(data)
-	if n <= 0 {
-		return 0, wal.ErrCorrupt
-	}
-	if s > math.MaxInt32 {
-		return 0, wal.ErrCorrupt
-	}
-	size := int(s)
-	if len(data)-n < size {
-		return 0, wal.ErrCorrupt
-	}
-	return n + size, nil
+	return it.Previous().Index(), nil
 }
 
 func channelBatchRecv[T any](ch <-chan T) []T {
-	// block if channel is empty
 	item, ok := <-ch
 	if !ok {
-		// channel is closed
 		return nil
 	}
 

@@ -198,15 +198,26 @@ func (s *evmStateStore) groupBySubType(changeSets []*sstypes.NamedChangeSet) map
 }
 
 func (s *evmStateStore) applyGrouped(version int64, grouped map[evmStoreType][]*iavl.KVPair) error {
+	if len(grouped) == 0 {
+		return s.SetLatestVersion(version)
+	}
+
 	if len(grouped) == 1 {
+		var touched evmStoreType
 		for storeType, pairs := range grouped {
-			return s.applyToSubDB(storeType, version, pairs)
+			touched = storeType
+			if err := s.applyToSubDB(storeType, version, pairs); err != nil {
+				return err
+			}
 		}
+		return s.advanceUntouchedSubDBs(version, map[evmStoreType]struct{}{touched: {}})
 	}
 
 	var wg sync.WaitGroup
 	errCh := make(chan error, len(grouped))
+	touched := make(map[evmStoreType]struct{}, len(grouped))
 	for storeType, pairs := range grouped {
+		touched[storeType] = struct{}{}
 		wg.Add(1)
 		go func(st evmStoreType, p []*iavl.KVPair) {
 			defer wg.Done()
@@ -220,7 +231,7 @@ func (s *evmStateStore) applyGrouped(version int64, grouped map[evmStoreType][]*
 	for err := range errCh {
 		return err
 	}
-	return nil
+	return s.advanceUntouchedSubDBs(version, touched)
 }
 
 func (s *evmStateStore) applyToSubDB(storeType evmStoreType, version int64, pairs []*iavl.KVPair) error {
@@ -235,6 +246,18 @@ func (s *evmStateStore) applyToSubDB(storeType evmStoreType, version int64, pair
 		},
 	}
 	return db.ApplyChangeSets(version, cs)
+}
+
+func (s *evmStateStore) advanceUntouchedSubDBs(version int64, touched map[evmStoreType]struct{}) error {
+	for storeType, db := range s.subDBs {
+		if _, ok := touched[storeType]; ok {
+			continue
+		}
+		if err := db.SetLatestVersion(version); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *evmStateStore) SetLatestVersion(version int64) error {

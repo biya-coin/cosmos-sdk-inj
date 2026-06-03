@@ -73,6 +73,7 @@ require (
 require (
 	buf.build/gen/go/cometbft/cometbft/protocolbuffers/go v1.36.5-20241120201313-68e42a58b301.1 // indirect
 	buf.build/gen/go/cosmos/gogo-proto/protocolbuffers/go v1.36.5-20240130113600-88ef6483f90f.1 // indirect
+	chainmaker.org/chainmaker/lws v0.0.0-20260602102656-1a24caa26bb4 // indirect
 	filippo.io/edwards25519 v1.0.0 // indirect
 	github.com/99designs/go-keychain v0.0.0-20191008050251-8e49817e8af4 // indirect
 	github.com/DataDog/appsec-internal-go v1.5.0 // indirect
@@ -172,11 +173,6 @@ require (
 	github.com/supranational/blst v0.3.14 // indirect
 	github.com/syndtr/goleveldb v1.0.1-0.20220721030215-126854af5e6d // indirect
 	github.com/tidwall/btree v1.7.0 // indirect
-	github.com/tidwall/gjson v1.19.0 // indirect
-	github.com/tidwall/match v1.1.1 // indirect
-	github.com/tidwall/pretty v1.2.1 // indirect
-	github.com/tidwall/tinylru v1.1.0 // indirect
-	github.com/tidwall/wal v1.2.1 // indirect
 	github.com/tinylib/msgp v1.1.8 // indirect
 	github.com/zbiljic/go-filelock v0.0.0-20170914061330-1dbf7103ab7d // indirect
 	github.com/zondax/hid v0.9.2 // indirect
@@ -211,6 +207,8 @@ replace cosmossdk.io/api => ./api
 
 // Below are the long-lived replace of the Cosmos SDK
 replace (
+	// lws (biya-coin/lws @ biyachain-wal, commit 1a24caa26bb4)
+	chainmaker.org/chainmaker/lws => github.com/biya-coin/lws v0.0.0-20260602102656-1a24caa26bb4
 	cosmossdk.io/store => ./store
 	cosmossdk.io/x/evidence => ./x/evidence
 	cosmossdk.io/x/feegrant => ./x/feegrant
