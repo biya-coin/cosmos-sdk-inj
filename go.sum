@@ -88,8 +88,8 @@ github.com/bgentry/speakeasy v0.1.1-0.20220910012023-760eaf8b6816 h1:41iFGWnSlI2
 github.com/bgentry/speakeasy v0.1.1-0.20220910012023-760eaf8b6816/go.mod h1:+zsyZBPWlz7T6j88CTgSN5bM796AkVf0kBD4zp0CCIs=
 github.com/bits-and-blooms/bitset v1.8.0 h1:FD+XqgOZDUxxZ8hzoBFuV9+cGWY9CslN6d5MS5JVb4c=
 github.com/bits-and-blooms/bitset v1.8.0/go.mod h1:7hO7Gc7Pp1vODcmWvKMRA9BNmbv6a/7QIWpPxHddWR8=
-github.com/biya-coin/cometbft v1.0.2-0.20260602044617-c8382082575c h1:nB93mQLXV+BxUc+6e0mabERyTgi9XRmV/uqeklvUx7M=
-github.com/biya-coin/cometbft v1.0.2-0.20260602044617-c8382082575c/go.mod h1:RgHHndb7wdtm9etmVj4tDn1NynC9YKIEJW9UUI3FCn4=
+github.com/biya-coin/cometbft v1.0.2-0.20260603023413-50a94ab896b3 h1:Du7oX2JSCMU3WGmyD+dFFVVh0o5FnAIxWv0Lf/JuR7I=
+github.com/biya-coin/cometbft v1.0.2-0.20260603023413-50a94ab896b3/go.mod h1:RgHHndb7wdtm9etmVj4tDn1NynC9YKIEJW9UUI3FCn4=
 github.com/biya-coin/cometbft/api v1.0.0-inj.2 h1:LVOVSb/1/X87oEkYMruPdECrkhFV7zi72agMmLowD7E=
 github.com/biya-coin/cometbft/api v1.0.0-inj.2/go.mod h1:Ivh6nSCTJPQOyfQo8dgnyu/T88it092sEqSrZSmTQN8=
 github.com/btcsuite/btcd/btcec/v2 v2.3.2 h1:5n0X6hX0Zk+6omWcihdYvdAlGf2DfasC0GMf7DClJ3U=
