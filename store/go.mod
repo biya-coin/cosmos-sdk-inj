@@ -5,7 +5,7 @@ go 1.23.0
 toolchain go1.23.8
 
 require (
-	chainmaker.org/chainmaker/lws v0.0.0-20260602102656-1a24caa26bb4
+	chainmaker.org/chainmaker/lws v0.0.0-20260605055142-aa08bd0937de
 	cosmossdk.io/errors v1.0.0
 	cosmossdk.io/log v1.4.1
 	cosmossdk.io/math v1.4.0
@@ -99,8 +99,8 @@ require (
 )
 
 replace (
-	// lws (biya-coin/lws @ biyachain-wal, commit 1a24caa26bb4)
-	chainmaker.org/chainmaker/lws => github.com/biya-coin/lws v0.0.0-20260602102656-1a24caa26bb4
+	// lws (biya-coin/lws @ biyachain-wal, commit aa08bd0937de)
+	chainmaker.org/chainmaker/lws => github.com/biya-coin/lws v0.0.0-20260605055142-aa08bd0937de
 	github.com/cometbft/cometbft => github.com/biya-coin/cometbft v1.0.2-0.20260602044617-c8382082575c
 	github.com/cometbft/cometbft/api => github.com/biya-coin/cometbft/api v1.0.0-inj.2
 )

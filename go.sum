@@ -92,8 +92,8 @@ github.com/biya-coin/cometbft v1.0.2-0.20260603023413-50a94ab896b3 h1:Du7oX2JSCM
 github.com/biya-coin/cometbft v1.0.2-0.20260603023413-50a94ab896b3/go.mod h1:RgHHndb7wdtm9etmVj4tDn1NynC9YKIEJW9UUI3FCn4=
 github.com/biya-coin/cometbft/api v1.0.0-inj.2 h1:LVOVSb/1/X87oEkYMruPdECrkhFV7zi72agMmLowD7E=
 github.com/biya-coin/cometbft/api v1.0.0-inj.2/go.mod h1:Ivh6nSCTJPQOyfQo8dgnyu/T88it092sEqSrZSmTQN8=
-github.com/biya-coin/lws v0.0.0-20260602102656-1a24caa26bb4 h1:F5TE/x3O3r1EXCgfdln6eyMzptyyWWT7bjgFc4UbxFE=
-github.com/biya-coin/lws v0.0.0-20260602102656-1a24caa26bb4/go.mod h1:CzzVcJywHPSmKa6ghuGHzzbP7VXPSyYjrMKRdKw3JMY=
+github.com/biya-coin/lws v0.0.0-20260605055142-aa08bd0937de h1:5d99irH1lU3IG6MyAJ+LcyfSxShCbRTVBILSRYpssVc=
+github.com/biya-coin/lws v0.0.0-20260605055142-aa08bd0937de/go.mod h1:CzzVcJywHPSmKa6ghuGHzzbP7VXPSyYjrMKRdKw3JMY=
 github.com/btcsuite/btcd/btcec/v2 v2.3.2 h1:5n0X6hX0Zk+6omWcihdYvdAlGf2DfasC0GMf7DClJ3U=
 github.com/btcsuite/btcd/btcec/v2 v2.3.2/go.mod h1:zYzJ8etWJQIv1Ogk7OzpWjowwOdXY1W/17j2MW85J04=
 github.com/btcsuite/btcd/btcutil v1.1.6 h1:zFL2+c3Lb9gEgqKNzowKUPQNb8jV7v5Oaodi/AYFd6c=
