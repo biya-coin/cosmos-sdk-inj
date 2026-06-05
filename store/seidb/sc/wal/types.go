@@ -29,6 +29,9 @@ type GenericWAL[T any] interface {
 	// Replay will read the replay the log and process each entry with the provided function
 	Replay(start uint64, end uint64, processFn func(index uint64, entry T) error) error
 
+	// WaitForPendingWrites blocks until all queued async writes/truncates are processed.
+	WaitForPendingWrites()
+
 	Close() error
 }
 

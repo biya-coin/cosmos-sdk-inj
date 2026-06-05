@@ -91,8 +91,12 @@ func (st *Store) Query(req *types.RequestQuery) (*types.ResponseQuery, error) {
 	if req.Height > 0 && req.Height > st.version {
 		return nil, fmt.Errorf("invalid height: %d", req.Height)
 	}
-	if _, err := st.reader.Iterator(st.storeKey.Name(), st.version, nil, nil); err != nil {
+	probeItr, err := st.reader.Iterator(st.storeKey.Name(), st.version, nil, nil)
+	if err != nil {
 		return nil, fmt.Errorf("historical version %d is unavailable in state store", st.version)
+	}
+	if err := probeItr.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close historical probe iterator: %w", err)
 	}
 	if _, ok := st.reader.Snapshot(st.storeKey.Name(), st.version); !ok {
 		return nil, fmt.Errorf("historical version %d is unavailable in state store", st.version)

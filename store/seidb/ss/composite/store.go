@@ -57,8 +57,7 @@ func NewStateStore(cfg seidbcfg.Config) (sstypes.StateStore, error) {
 		cs.evmStore = evmStore
 	}
 
-	changelogPath := filepath.Join(cfg.Home, "data", "pebbledb", "changelog")
-	if err := recoverCompositeStateStore(changelogPath, cs); err != nil {
+	if err := recoverCompositeStateStore(cfg.Home, cs); err != nil {
 		_ = cs.Close()
 		return nil, fmt.Errorf("failed to recover composite state store: %w", err)
 	}
@@ -216,13 +215,19 @@ func (s *compositeStateStore) WaitForPendingWrites() {
 	}
 }
 
-func recoverCompositeStateStore(changelogPath string, compositeStore *compositeStateStore) error {
+func recoverCompositeStateStore(home string, compositeStore *compositeStateStore) error {
 	var cosmosVersion int64
+	var replayWAL func(fromVersion int64, toVersion int64, handler func(entry scproto.ChangelogEntry) error) error
 	if compositeStore.cosmosStore != nil {
 		if reader, ok := compositeStore.cosmosStore.(interface{ HasVersion(int64) bool }); ok {
 			_ = reader
 		}
 		cosmosVersion = compositeStore.cosmosStore.LatestVersion()
+		if walReader, ok := compositeStore.cosmosStore.(interface {
+			ReplayWAL(fromVersion int64, toVersion int64, handler func(entry scproto.ChangelogEntry) error) error
+		}); ok {
+			replayWAL = walReader.ReplayWAL
+		}
 	}
 
 	var evmVersion int64
@@ -235,7 +240,7 @@ func recoverCompositeStateStore(changelogPath string, compositeStore *compositeS
 		startVersion = evmVersion
 	}
 
-	return replayCompositeWAL(changelogPath, startVersion, -1, func(entry scproto.ChangelogEntry) error {
+	replayFn := func(entry scproto.ChangelogEntry) error {
 		changeSets := ssevm.FilterNamedChangeSets(ssevm.ToNamedChangeSets(ssutils.FromProtoChangeSets(entry.Changesets)))
 		_ = changeSets
 		if compositeStore.cosmosStore != nil && entry.Version > cosmosVersion {
@@ -263,7 +268,14 @@ func recoverCompositeStateStore(changelogPath string, compositeStore *compositeS
 			}
 		}
 		return nil
-	})
+	}
+
+	if replayWAL != nil {
+		return replayWAL(startVersion, -1, replayFn)
+	}
+
+	changelogPath := filepath.Join(home, "data", "pebbledb", "changelog")
+	return replayCompositeWAL(changelogPath, startVersion, -1, replayFn)
 }
 
 func replayCompositeWAL(changelogPath string, fromVersion int64, toVersion int64, handler func(entry scproto.ChangelogEntry) error) error {

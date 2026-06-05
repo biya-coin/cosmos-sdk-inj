@@ -134,6 +134,69 @@ func NewStore(cfg Config) (StateStore, error) {
 	return store, nil
 }
 
+func (s *pebbleStateStore) ReplayWAL(fromVersion int64, toVersion int64, handler func(entry scproto.ChangelogEntry) error) error {
+	if s.changelog == nil {
+		return nil
+	}
+
+	firstOffset, err := s.changelog.FirstOffset()
+	if err != nil || firstOffset <= 0 {
+		return nil
+	}
+
+	lastOffset, err := s.changelog.LastOffset()
+	if err != nil || lastOffset <= 0 {
+		return nil
+	}
+
+	lastEntry, err := s.changelog.ReadAt(lastOffset)
+	if err != nil {
+		return err
+	}
+	if lastEntry.Version <= fromVersion {
+		return nil
+	}
+
+	startOffset, err := s.findReplayStartOffset(firstOffset, lastOffset, fromVersion)
+	if err != nil {
+		return err
+	}
+	if startOffset > lastOffset {
+		return nil
+	}
+
+	return s.changelog.Replay(startOffset, lastOffset, func(_ uint64, entry scproto.ChangelogEntry) error {
+		if toVersion >= 0 && entry.Version > toVersion {
+			return nil
+		}
+		return handler(entry)
+	})
+}
+
+func (s *pebbleStateStore) findReplayStartOffset(firstOffset, lastOffset uint64, targetVersion int64) (uint64, error) {
+	lo, hi := firstOffset, lastOffset
+	result := lastOffset + 1
+
+	for lo <= hi {
+		mid := lo + (hi-lo)/2
+		entry, err := s.changelog.ReadAt(mid)
+		if err != nil {
+			return 0, fmt.Errorf("failed to read WAL at offset %d: %w", mid, err)
+		}
+		if entry.Version > targetVersion {
+			result = mid
+			if mid == firstOffset {
+				break
+			}
+			hi = mid - 1
+		} else {
+			lo = mid + 1
+		}
+	}
+
+	return result, nil
+}
+
 func (s *pebbleStateStore) Snapshot(storeName string, version int64) (map[string][]byte, bool) {
 	s.mtx.RLock()
 	defer s.mtx.RUnlock()

@@ -987,6 +987,7 @@ func (db *DB) Close() error {
 
 	// Close WAL after snapshot rewrite goroutine has fully exited.
 	if db.streamHandler != nil {
+		db.streamHandler.WaitForPendingWrites()
 		errs = append(errs, db.streamHandler.Close())
 		db.streamHandler = nil
 	}

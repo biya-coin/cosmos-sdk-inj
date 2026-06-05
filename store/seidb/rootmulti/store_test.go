@@ -337,6 +337,7 @@ func TestStore_SCFailurePanicsCommit(t *testing.T) {
 func TestStore_CommitAcceptsEmptyValue(t *testing.T) {
 	db := dbm.NewMemDB()
 	store := NewStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics(), testMemIAVLConfig(t))
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	key := types.NewKVStoreKey("test")
 	store.MountStoreWithDB(key, types.StoreTypeIAVL, nil)
 	require.NoError(t, store.LoadLatestVersion())
@@ -361,6 +362,7 @@ func TestStore_CommitAcceptsEmptyValue(t *testing.T) {
 func TestCommit_AppHashFromSC(t *testing.T) {
 	db := dbm.NewMemDB()
 	store := NewStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics(), testMemIAVLConfig(t))
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	key := types.NewKVStoreKey("test")
 	store.MountStoreWithDB(key, types.StoreTypeIAVL, nil)
 	require.NoError(t, store.LoadLatestVersion())
@@ -469,6 +471,7 @@ func TestCacheMultiStoreWithVersion_ErrWhenSSUnavailable(t *testing.T) {
 	cfg := testMemIAVLConfig(t)
 	cfg.StateStoreBackend = ""
 	store := NewStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics(), cfg)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	key := types.NewKVStoreKey("test")
 
 	store.MountStoreWithDB(key, types.StoreTypeIAVL, nil)
@@ -491,6 +494,7 @@ func TestQuery_HistoricalNoProofErrWhenSSUnavailable(t *testing.T) {
 	cfg := testMemIAVLConfig(t)
 	cfg.StateStoreBackend = ""
 	store := NewStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics(), cfg)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	key := types.NewKVStoreKey("test")
 
 	store.MountStoreWithDB(key, types.StoreTypeIAVL, nil)
@@ -550,6 +554,7 @@ func TestCacheMultiStoreWithVersion_ErrWhenStateHistoryUnavailable(t *testing.T)
 	cfg := testMemIAVLConfig(t)
 	cfg.KeepRecent = 1
 	store := NewStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics(), cfg)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	key := types.NewKVStoreKey("test")
 
 	store.MountStoreWithDB(key, types.StoreTypeIAVL, nil)
@@ -570,6 +575,7 @@ func TestCacheMultiStoreWithVersion_ErrWhenStateHistoryUnavailable(t *testing.T)
 func TestRollbackToVersion_SyncsSCState(t *testing.T) {
 	db := dbm.NewMemDB()
 	store := NewStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics(), testMemIAVLConfig(t))
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	key := types.NewKVStoreKey("test")
 
 	store.MountStoreWithDB(key, types.StoreTypeIAVL, nil)
@@ -594,6 +600,27 @@ func TestRollbackToVersion_SyncsSCState(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, []byte("v1"), res.Value)
+}
+
+func TestRootmultiMmapWALLifecycleMinimal(t *testing.T) {
+	db := dbm.NewMemDB()
+	store := NewStore(db, log.NewNopLogger(), metrics.NewNoOpMetrics(), testMemIAVLConfig(t))
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	key := types.NewKVStoreKey("test")
+
+	store.MountStoreWithDB(key, types.StoreTypeIAVL, nil)
+	require.NoError(t, store.LoadLatestVersion())
+
+	kv := store.GetKVStore(key)
+	kv.Set([]byte("k"), []byte("v1"))
+	_ = commitMemIAVLBlock(store)
+
+	kv = store.GetKVStore(key)
+	kv.Set([]byte("k"), []byte("v2"))
+	_ = commitMemIAVLBlock(store)
+
+	require.NoError(t, store.RollbackToVersion(1))
+	require.Equal(t, int64(1), store.LastCommitID().Version)
 }
 
 func TestRollbackToVersion_AttemptsBothSCAndSSEvenOnError(t *testing.T) {

@@ -31,6 +31,7 @@ type WAL[T any] struct {
 
 	writeChan    chan *writeRequest[T]
 	truncateChan chan *truncateRequest
+	waitChan     chan chan struct{}
 	closeReqChan chan struct{}
 	closeErrChan chan error
 
@@ -105,6 +106,7 @@ func NewWAL[T any](
 		closeErrChan: make(chan error, 1),
 		writeChan:    make(chan *writeRequest[T], bufferSize),
 		truncateChan: make(chan *truncateRequest, bufferSize),
+		waitChan:     make(chan chan struct{}, 1),
 	}
 
 	go w.mainLoop()
@@ -472,10 +474,21 @@ func (walLog *WAL[T]) drain() {
 			walLog.handleWrite(req)
 		case req := <-walLog.truncateChan:
 			walLog.handleTruncate(req)
+		case done := <-walLog.waitChan:
+			close(done)
 		default:
 			return
 		}
 	}
+}
+
+func (walLog *WAL[T]) WaitForPendingWrites() {
+	if !walLog.asyncWrites {
+		return
+	}
+	done := make(chan struct{})
+	_ = threading.InterruptiblePush(walLog.ctx, walLog.waitChan, done)
+	<-done
 }
 
 func (walLog *WAL[T]) Close() error {
@@ -514,11 +527,7 @@ func open(dir string, opts Config) (*lws.Lws, error) {
 		lws.WithFilePrex("segment_"),
 		lws.WithFileExtension("wal"),
 		lws.WithWriteFlag(writeFlag, flushQuota),
-		// WAL append/write needs correctness first. The lws mmap buffered path is
-		// currently unstable for large changelog entries under real chain load, so
-		// use normal file writes without an internal data buffer here.
-		lws.WithBufferSize(0),
-		lws.WithWriteFileType(lws.FT_NORMAL),
+		lws.WithWriteFileType(lws.FT_MMAP),
 		lws.WithReadNoCopy(),
 	)
 	if err != nil {
@@ -544,6 +553,8 @@ func (walLog *WAL[T]) mainLoop() {
 			walLog.handleWrite(req)
 		case req := <-walLog.truncateChan:
 			walLog.handleTruncate(req)
+		case done := <-walLog.waitChan:
+			close(done)
 		case <-pruneChan:
 			walLog.prune()
 		case <-walLog.closeReqChan:

@@ -107,6 +107,24 @@ func (s *Store) Config() Config {
 	return s.config
 }
 
+func (s *Store) Close() error {
+	var errs []error
+	if closer, ok := s.scStore.(interface{ Close() error }); ok {
+		if err := closer.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if s.ss != nil {
+		if err := s.ss.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	return nil
+}
+
 func (s *Store) scBackendIsMemIAVL() bool {
 	backend := s.config.StateCommitmentBackend
 	if backend == "" {

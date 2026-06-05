@@ -830,6 +830,69 @@ func TestFastCommit(t *testing.T) {
 	require.NoError(t, db.Close())
 }
 
+func TestMmapWALLifecycleWithRollbackAndReopen(t *testing.T) {
+	for _, asyncBuf := range []int{0, 100} {
+		t.Run(strconv.Itoa(asyncBuf), func(t *testing.T) {
+			dir := t.TempDir()
+			db, err := OpenDB(0, Options{
+				Config: Config{
+					AsyncCommitBuffer: asyncBuf,
+				},
+				Dir:             dir,
+				CreateIfMissing: true,
+				InitialStores:   []string{"test"},
+			})
+			require.NoError(t, err)
+
+			csAt := func(v string) []*proto.NamedChangeSet {
+				return []*proto.NamedChangeSet{
+					{
+						Name: "test",
+						Changeset: iavl.ChangeSet{
+							Pairs: []*iavl.KVPair{
+								{Key: []byte("k"), Value: []byte(v)},
+							},
+						},
+					},
+				}
+			}
+
+			require.NoError(t, db.ApplyChangeSets(csAt("v1")))
+			_, err = db.Commit()
+			require.NoError(t, err)
+
+			require.NoError(t, db.ApplyChangeSets(csAt("v2")))
+			_, err = db.Commit()
+			require.NoError(t, err)
+
+			require.NoError(t, db.Close())
+
+			db, err = OpenDB(1, Options{
+				Config: Config{
+					AsyncCommitBuffer: asyncBuf,
+				},
+				Dir:                dir,
+				InitialStores:      []string{"test"},
+				LoadForOverwriting: true,
+			})
+			require.NoError(t, err)
+			require.Equal(t, int64(1), db.Version())
+			require.NoError(t, db.Close())
+
+			db, err = OpenDB(0, Options{
+				Config: Config{
+					AsyncCommitBuffer: asyncBuf,
+				},
+				Dir:           dir,
+				InitialStores: []string{"test"},
+			})
+			require.NoError(t, err)
+			require.Equal(t, int64(1), db.Version())
+			require.NoError(t, db.Close())
+		})
+	}
+}
+
 func TestRepeatedApplyChangeSet(t *testing.T) {
 	db, err := OpenDB(0, Options{
 		Config: Config{

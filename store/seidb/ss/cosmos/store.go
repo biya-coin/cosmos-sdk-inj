@@ -1,6 +1,7 @@
 package cosmos
 
 import (
+	scproto "cosmossdk.io/store/seidb/sc/proto"
 	sstypes "cosmossdk.io/store/seidb/ss/types"
 	"cosmossdk.io/store/types"
 )
@@ -63,6 +64,15 @@ func (s *cosmosStateStore) SyncFromStores(stores map[types.StoreKey]types.Commit
 
 func (s *cosmosStateStore) Close() error {
 	return s.db.Close()
+}
+
+func (s *cosmosStateStore) ReplayWAL(fromVersion int64, toVersion int64, handler func(entry scproto.ChangelogEntry) error) error {
+	if replayer, ok := s.db.(interface {
+		ReplayWAL(fromVersion int64, toVersion int64, handler func(entry scproto.ChangelogEntry) error) error
+	}); ok {
+		return replayer.ReplayWAL(fromVersion, toVersion, handler)
+	}
+	return nil
 }
 
 func (s *cosmosStateStore) WaitForPendingWrites() {

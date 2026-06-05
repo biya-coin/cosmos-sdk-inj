@@ -44,6 +44,9 @@ func (cs *CommitStore) SetInitialVersion(initialVersion int64) error {
 func (cs *CommitStore) Rollback(targetVersion int64) error {
 	// Close existing resources
 	if cs.db != nil {
+		if wal := cs.db.GetWAL(); wal != nil {
+			wal.WaitForPendingWrites()
+		}
 		_ = cs.db.Close()
 	}
 
@@ -80,6 +83,9 @@ func (cs *CommitStore) LoadVersion(targetVersion int64, readOnly bool) (types.Co
 
 	// Close existing resources
 	if cs.db != nil {
+		if wal := cs.db.GetWAL(); wal != nil {
+			wal.WaitForPendingWrites()
+		}
 		_ = cs.db.Close()
 	}
 
