@@ -20,6 +20,7 @@ func (msg MsgUpdateParams) ToProtoConsensusParams() (cmtproto.ConsensusParams, e
 		Block: &cmtproto.BlockParams{
 			MaxBytes: msg.Block.MaxBytes,
 			MaxGas:   msg.Block.MaxGas,
+			MaxTxs:   msg.Block.MaxTxs,
 		},
 		Evidence: &cmtproto.EvidenceParams{
 			MaxAgeNumBlocks: msg.Evidence.MaxAgeNumBlocks,

@@ -172,6 +172,7 @@ func NewConsensusGenesis(params cmtproto.ConsensusParams, validators []cmttypes.
 			Block: cmttypes.BlockParams{
 				MaxBytes: params.Block.MaxBytes,
 				MaxGas:   params.Block.MaxGas,
+				MaxTxs:   params.Block.MaxTxs,
 			},
 			Evidence: cmttypes.EvidenceParams{
 				MaxAgeNumBlocks: params.Evidence.MaxAgeNumBlocks,

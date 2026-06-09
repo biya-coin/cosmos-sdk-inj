@@ -222,9 +222,9 @@ replace (
 
 	// Use CometBFT v1.0.1 with Mempool lanes and DOG
 	// github.com/cometbft/cometbft => github.com/biya-coin/cometbft v1.0.2-0.20260526070023-6eb34049f0cb
-	github.com/cometbft/cometbft => github.com/biya-coin/cometbft v1.0.2-0.20260602044617-c8382082575c
+	github.com/cometbft/cometbft => github.com/biya-coin/cometbft v1.0.1-0.20260609081231-a0d934a50524
 
-	github.com/cometbft/cometbft/api => github.com/biya-coin/cometbft/api v1.0.0-inj.2
+	github.com/cometbft/cometbft/api => github.com/biya-coin/cometbft/api v1.0.1-0.20260609081231-a0d934a50524
 	// dgrijalva/jwt-go is deprecated and doesn't receive security updates.
 	// TODO: remove it: https://github.com/cosmos/cosmos-sdk/issues/13134
 	github.com/dgrijalva/jwt-go => github.com/golang-jwt/jwt/v4 v4.4.2
