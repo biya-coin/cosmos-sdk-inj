@@ -12,6 +12,7 @@ import (
 	"github.com/cockroachdb/errors"
 	abci "github.com/cometbft/cometbft/abci/types"
 	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v1"
+	"github.com/cometbft/cometbft/monitor"
 	"github.com/cosmos/gogoproto/proto"
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
@@ -1087,13 +1088,19 @@ func (app *BaseApp) Commit() (*abci.CommitResponse, error) {
 // state transitions will be flushed to disk and as a result, but we already have
 // an application Merkle root.
 func (app *BaseApp) workingHash() []byte {
+	height := app.finalizeBlockState.Context().BlockHeight()
+
 	// Write the FinalizeBlock state into branched storage and commit the MultiStore.
 	// The write to the FinalizeBlock state writes all state transitions to the root
 	// MultiStore (app.cms) so when Commit() is called it persists those values.
+	msWriteStart := time.Now()
 	app.finalizeBlockState.ms.Write()
+	monitor.LogWorkingHashMsWrite(height, float64(time.Since(msWriteStart).Nanoseconds())/1e6)
 
 	// Get the hash of all writes in order to return the apphash to the comet in finalizeBlock.
+	cmsStart := time.Now()
 	commitHash := app.cms.WorkingHash()
+	monitor.LogWorkingHashCmsWorkingHash(height, float64(time.Since(cmsStart).Nanoseconds())/1e6)
 	app.logger.Debug("hash of all writes", "workingHash", fmt.Sprintf("%X", commitHash))
 
 	return commitHash
