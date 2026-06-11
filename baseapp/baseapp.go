@@ -6,6 +6,7 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/InjectiveLabs/metrics"
@@ -38,6 +39,17 @@ import (
 
 type (
 	execMode uint8
+
+	decodedTxResult struct {
+		tx  sdk.Tx
+		err error
+	}
+
+	decodedTxCache struct {
+		height int64
+		hash   string
+		txs    []decodedTxResult
+	}
 
 	// StoreLoader defines a customizable function to control how we load the
 	// CommitMultiStore from disk. This is useful for state migration, when
@@ -72,10 +84,10 @@ type BaseApp struct {
 	db                dbm.DB                      // common DB backend
 	cms               storetypes.CommitMultiStore // Main (uncached) state
 	storeConfig       store.StoreConfig
-	qms               storetypes.RootMultiStore   // Optional alternative multistore for querying only.
-	storeLoader       StoreLoader                 // function to handle store loading, may be overridden with SetStoreLoader()
-	grpcQueryRouter   *GRPCQueryRouter            // router for redirecting gRPC query calls
-	msgServiceRouter  *MsgServiceRouter           // router for redirecting Msg service messages
+	qms               storetypes.RootMultiStore // Optional alternative multistore for querying only.
+	storeLoader       StoreLoader               // function to handle store loading, may be overridden with SetStoreLoader()
+	grpcQueryRouter   *GRPCQueryRouter          // router for redirecting gRPC query calls
+	msgServiceRouter  *MsgServiceRouter         // router for redirecting Msg service messages
 	interfaceRegistry codectypes.InterfaceRegistry
 	txDecoder         sdk.TxDecoder // unmarshal []byte into sdk.Tx
 	txEncoder         sdk.TxEncoder // marshal sdk.Tx into []byte
@@ -195,6 +207,9 @@ type BaseApp struct {
 	// including the goroutine handling.This is experimental and must be enabled
 	// by developers.
 	optimisticExec *oe.OptimisticExecution
+
+	processProposalTxCacheMtx sync.RWMutex
+	processProposalTxCache    *decodedTxCache
 
 	// disableBlockGasMeter will disable the block gas meter if true, block gas meter is tricky to support
 	// when executing transactions in parallel.
@@ -1235,6 +1250,44 @@ func (app *BaseApp) ProcessProposalVerifyTx(txBz []byte) (sdk.Tx, error) {
 
 func (app *BaseApp) TxDecode(txBytes []byte) (sdk.Tx, error) {
 	return app.txDecoder(txBytes)
+}
+
+func (app *BaseApp) RecordProcessProposalDecodedTxs(height int64, hash []byte, txs []sdk.Tx) {
+	app.processProposalTxCacheMtx.Lock()
+	defer app.processProposalTxCacheMtx.Unlock()
+
+	cachedTxs := make([]decodedTxResult, len(txs))
+	for i, tx := range txs {
+		cachedTxs[i] = decodedTxResult{tx: tx}
+	}
+
+	app.processProposalTxCache = &decodedTxCache{
+		height: height,
+		hash:   string(hash),
+		txs:    cachedTxs,
+	}
+}
+
+func (app *BaseApp) getProcessProposalDecodedTxs(height int64, hash []byte, txCount int) []sdk.Tx {
+	app.processProposalTxCacheMtx.RLock()
+	defer app.processProposalTxCacheMtx.RUnlock()
+
+	if app.processProposalTxCache == nil ||
+		app.processProposalTxCache.height != height ||
+		app.processProposalTxCache.hash != string(hash) ||
+		len(app.processProposalTxCache.txs) != txCount {
+		return nil
+	}
+
+	txs := make([]sdk.Tx, txCount)
+	for i, cachedTx := range app.processProposalTxCache.txs {
+		if cachedTx.err != nil || cachedTx.tx == nil {
+			return nil
+		}
+		txs[i] = cachedTx.tx
+	}
+
+	return txs
 }
 
 func (app *BaseApp) TxEncode(tx sdk.Tx) ([]byte, error) {

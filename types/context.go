@@ -18,6 +18,15 @@ import (
 // ExecMode defines the execution mode which can be set on a Context.
 type ExecMode uint8
 
+// ProcessProposalDecodedTxRecorder can be attached to a ProcessProposal
+// context so proposal handlers that decode all transactions can pass the
+// decoded txs back to BaseApp for later FinalizeBlock execution.
+type ProcessProposalDecodedTxRecorder interface {
+	RecordProcessProposalDecodedTxs(height int64, hash []byte, txs []Tx)
+}
+
+const processProposalDecodedTxRecorderKey = "process-proposal-decoded-tx-recorder"
+
 // All possible execution modes.
 const (
 	ExecModeCheck ExecMode = iota
@@ -354,6 +363,15 @@ func (c Context) Value(key interface{}) interface{} {
 	}
 
 	return c.baseCtx.Value(key)
+}
+
+func (c Context) WithProcessProposalDecodedTxRecorder(recorder ProcessProposalDecodedTxRecorder) Context {
+	return c.WithValue(processProposalDecodedTxRecorderKey, recorder)
+}
+
+func ProcessProposalDecodedTxRecorderFromContext(ctx Context) (ProcessProposalDecodedTxRecorder, bool) {
+	recorder, ok := ctx.Value(processProposalDecodedTxRecorderKey).(ProcessProposalDecodedTxRecorder)
+	return recorder, ok
 }
 
 // ----------------------------------------------------------------------------

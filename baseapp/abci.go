@@ -537,7 +537,8 @@ func (app *BaseApp) ProcessProposal(req *abci.ProcessProposalRequest) (resp *abc
 			ChainID: app.chainID,
 			Height:  req.Height,
 			Time:    req.Time,
-		}))
+		}).
+		WithProcessProposalDecodedTxRecorder(app))
 
 	app.processProposalState.SetContext(app.processProposalState.Context().
 		WithConsensusParams(app.GetConsensusParams(app.processProposalState.Context())).
@@ -836,7 +837,7 @@ func (app *BaseApp) internalFinalizeBlock(ctx context.Context, req *abci.Finaliz
 	// NOTE: Not all raw transactions may adhere to the sdk.Tx interface, e.g.
 	// vote extensions, so skip those.
 	ifbT1 := time.Now()
-	txResults, err := app.executeTxs(ctx, req.Txs)
+	txResults, err := app.executeTxs(ctx, req.Txs, app.getProcessProposalDecodedTxs(req.Height, req.Hash, len(req.Txs)))
 	if err != nil {
 		return nil, err
 	}
@@ -883,7 +884,7 @@ func (app *BaseApp) internalFinalizeBlock(ctx context.Context, req *abci.Finaliz
 	}, nil
 }
 
-func (app *BaseApp) executeTxs(ctx context.Context, txs [][]byte) ([]*abci.ExecTxResult, error) {
+func (app *BaseApp) executeTxs(ctx context.Context, txs [][]byte, decodedTxs []sdk.Tx) ([]*abci.ExecTxResult, error) {
 	txResults := make([]*abci.ExecTxResult, 0, len(txs))
 	// Reset block-scoped sub-step accumulators before processing any tx.
 	blockTxAnteMs = 0
@@ -892,7 +893,17 @@ func (app *BaseApp) executeTxs(ctx context.Context, txs [][]byte) ([]*abci.ExecT
 	for txIdx, rawTx := range txs {
 		var response *abci.ExecTxResult
 
-		if memTx, err := app.txDecoder(rawTx); err == nil {
+		var (
+			memTx sdk.Tx
+			err   error
+		)
+		if len(decodedTxs) == len(txs) {
+			memTx = decodedTxs[txIdx]
+		} else {
+			memTx, err = app.txDecoder(rawTx)
+		}
+
+		if err == nil && memTx != nil {
 			response = app.deliverTx(rawTx, memTx, txIdx)
 		} else {
 			// In the case where a transaction included in a block proposal is malformed,
