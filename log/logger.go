@@ -1,10 +1,30 @@
 package log
 
 import (
+	"encoding"
+	"encoding/json"
+	"fmt"
 	"io"
 
+	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/pkgerrors"
 )
+
+func init() {
+	zerolog.InterfaceMarshalFunc = func(i any) ([]byte, error) {
+		switch v := i.(type) {
+		case json.Marshaler:
+			return json.Marshal(i)
+		case encoding.TextMarshaler:
+			return json.Marshal(i)
+		case fmt.Stringer:
+			return json.Marshal(v.String())
+		default:
+			return json.Marshal(i)
+		}
+	}
+}
 
 // ModuleKey defines a module logging key.
 const ModuleKey = "module"
@@ -20,6 +40,10 @@ type Logger interface {
 	// The key of the tuple must be a string.
 	Info(msg string, keyVals ...any)
 
+	// Warn takes a message and a set of key/value pairs and logs with level WARN.
+	// The key of the tuple must be a string.
+	Warn(msg string, keyVals ...any)
+
 	// Error takes a message and a set of key/value pairs and logs with level ERR.
 	// The key of the tuple must be a string.
 	Error(msg string, keyVals ...any)
@@ -31,6 +55,9 @@ type Logger interface {
 	// With returns a new wrapped logger with additional context provided by a set.
 	With(keyVals ...any) Logger
 
+	// WithContext returns a new wrapped logger with additional context provided by a set.
+	WithContext(keyVals ...any) any
+
 	// Impl returns the underlying logger implementation.
 	// It is used to access the full functionalities of the underlying logger.
 	// Advanced users can type cast the returned value to the actual logger.
@@ -39,6 +66,8 @@ type Logger interface {
 
 type zeroLogWrapper struct {
 	*zerolog.Logger
+	filter FilterFunc
+	module string
 }
 
 // NewLogger returns a new logger that writes to the given destination.
@@ -69,6 +98,14 @@ func NewLogger(dst io.Writer, options ...Option) Logger {
 	}
 
 	logger := zerolog.New(output)
+	if logCfg.StackTrace {
+		zerolog.ErrorStackMarshaler = func(err error) interface{} {
+			return pkgerrors.MarshalStack(errors.WithStack(err))
+		}
+
+		logger = logger.With().Stack().Logger()
+	}
+
 	if logCfg.TimeFormat != "" {
 		logger = logger.With().Timestamp().Logger()
 	}
@@ -77,42 +114,105 @@ func NewLogger(dst io.Writer, options ...Option) Logger {
 		logger = logger.Level(logCfg.Level)
 	}
 
-	return zeroLogWrapper{&logger}
+	for _, hook := range logCfg.Hooks {
+		logger = logger.Hook(hook)
+	}
+
+	return zeroLogWrapper{
+		Logger: &logger,
+		filter: logCfg.Filter,
+	}
 }
 
 // NewCustomLogger returns a new logger with the given zerolog logger.
 func NewCustomLogger(logger zerolog.Logger) Logger {
-	return zeroLogWrapper{&logger}
+	return zeroLogWrapper{Logger: &logger}
 }
 
 // Info takes a message and a set of key/value pairs and logs with level INFO.
 // The key of the tuple must be a string.
 func (l zeroLogWrapper) Info(msg string, keyVals ...interface{}) {
+	if !l.shouldLog(deriveModule(l.module, keyVals), zerolog.InfoLevel.String()) {
+		return
+	}
 	l.Logger.Info().Fields(keyVals).Msg(msg)
+}
+
+// Warn takes a message and a set of key/value pairs and logs with level WARN.
+// The key of the tuple must be a string.
+func (l zeroLogWrapper) Warn(msg string, keyVals ...interface{}) {
+	if !l.shouldLog(deriveModule(l.module, keyVals), zerolog.WarnLevel.String()) {
+		return
+	}
+	l.Logger.Warn().Fields(keyVals).Msg(msg)
 }
 
 // Error takes a message and a set of key/value pairs and logs with level DEBUG.
 // The key of the tuple must be a string.
 func (l zeroLogWrapper) Error(msg string, keyVals ...interface{}) {
+	if !l.shouldLog(deriveModule(l.module, keyVals), zerolog.ErrorLevel.String()) {
+		return
+	}
 	l.Logger.Error().Fields(keyVals).Msg(msg)
 }
 
 // Debug takes a message and a set of key/value pairs and logs with level ERR.
 // The key of the tuple must be a string.
 func (l zeroLogWrapper) Debug(msg string, keyVals ...interface{}) {
+	if !l.shouldLog(deriveModule(l.module, keyVals), zerolog.DebugLevel.String()) {
+		return
+	}
 	l.Logger.Debug().Fields(keyVals).Msg(msg)
 }
 
 // With returns a new wrapped logger with additional context provided by a set.
 func (l zeroLogWrapper) With(keyVals ...interface{}) Logger {
 	logger := l.Logger.With().Fields(keyVals).Logger()
-	return zeroLogWrapper{&logger}
+	return zeroLogWrapper{
+		Logger: &logger,
+		filter: l.filter,
+		module: deriveModule(l.module, keyVals),
+	}
+}
+
+// WithContext returns a new wrapped logger with additional context provided by a set.
+func (l zeroLogWrapper) WithContext(keyVals ...interface{}) any {
+	logger := l.Logger.With().Fields(keyVals).Logger()
+	return zeroLogWrapper{
+		Logger: &logger,
+		filter: l.filter,
+		module: deriveModule(l.module, keyVals),
+	}
 }
 
 // Impl returns the underlying zerolog logger.
 // It can be used to used zerolog structured API directly instead of the wrapper.
 func (l zeroLogWrapper) Impl() interface{} {
 	return l.Logger
+}
+
+func (l zeroLogWrapper) shouldLog(module, level string) bool {
+	if l.filter == nil {
+		return true
+	}
+
+	return !l.filter(module, level)
+}
+
+func deriveModule(current string, keyVals []interface{}) string {
+	module := current
+	for i := 0; i+1 < len(keyVals); i += 2 {
+		key, ok := keyVals[i].(string)
+		if !ok || key != ModuleKey {
+			continue
+		}
+
+		if value, ok := keyVals[i+1].(string); ok {
+			module = value
+		}
+	}
+
+	return module
 }
 
 // NewNopLogger returns a new logger that does nothing.
@@ -127,7 +227,11 @@ func NewNopLogger() Logger {
 type nopLogger struct{}
 
 func (nopLogger) Info(string, ...any)  {}
+func (nopLogger) Warn(string, ...any)  {}
 func (nopLogger) Error(string, ...any) {}
 func (nopLogger) Debug(string, ...any) {}
 func (nopLogger) With(...any) Logger   { return nopLogger{} }
+func (nopLogger) WithContext(...any) any {
+	return nopLogger{}
+}
 func (nopLogger) Impl() any            { return nopLogger{} }
