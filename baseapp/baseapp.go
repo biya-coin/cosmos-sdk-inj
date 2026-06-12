@@ -6,6 +6,7 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/InjectiveLabs/metrics"
@@ -72,10 +73,10 @@ type BaseApp struct {
 	db                dbm.DB                      // common DB backend
 	cms               storetypes.CommitMultiStore // Main (uncached) state
 	storeConfig       store.StoreConfig
-	qms               storetypes.RootMultiStore   // Optional alternative multistore for querying only.
-	storeLoader       StoreLoader                 // function to handle store loading, may be overridden with SetStoreLoader()
-	grpcQueryRouter   *GRPCQueryRouter            // router for redirecting gRPC query calls
-	msgServiceRouter  *MsgServiceRouter           // router for redirecting Msg service messages
+	qms               storetypes.RootMultiStore // Optional alternative multistore for querying only.
+	storeLoader       StoreLoader               // function to handle store loading, may be overridden with SetStoreLoader()
+	grpcQueryRouter   *GRPCQueryRouter          // router for redirecting gRPC query calls
+	msgServiceRouter  *MsgServiceRouter         // router for redirecting Msg service messages
 	interfaceRegistry codectypes.InterfaceRegistry
 	txDecoder         sdk.TxDecoder // unmarshal []byte into sdk.Tx
 	txEncoder         sdk.TxEncoder // marshal sdk.Tx into []byte
@@ -211,7 +212,17 @@ type BaseApp struct {
 
 	// perfMetrics holds custom Prometheus performance histograms.
 	// Populated by PrometheusMetrics option; defaults to no-op.
-	perfMetrics *perfMetrics
+	perfMetrics      *perfMetrics
+	checkTxMetricsMu sync.Mutex
+	checkTxMetrics   checkTxMetricsWindow
+}
+
+type checkTxMetricsWindow struct {
+	height       int64
+	count        uint64
+	totalSeconds float64
+	runTxSeconds float64
+	initialized  bool
 }
 
 // NewBaseApp returns a reference to an initialized BaseApp. It accepts a

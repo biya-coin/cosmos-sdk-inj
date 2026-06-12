@@ -56,6 +56,14 @@ type perfMetrics struct {
 	// 对应 Loki msg=baseapp_commit_timing
 	// Labels: step = total | cms_commit
 	BaseAppCommitStepSeconds cmtmetrics.Histogram
+
+	// ── CheckTx 单笔耗时（秒） ──────────────────────────────────────────
+	// Labels: step = total | run_tx
+	CheckTxStepSeconds cmtmetrics.Histogram
+
+	// ── CheckTx 按 checkState 高度聚合的上一高度区间统计 ────────────────
+	// Labels: kind = total_seconds | run_tx_seconds | count | height
+	CheckTxHeightWindow cmtmetrics.Gauge
 }
 
 // newPrometheusMetrics constructs a perfMetrics backed by real Prometheus
@@ -64,47 +72,61 @@ type perfMetrics struct {
 func newPrometheusMetrics(namespace string) *perfMetrics {
 	globalPerfMetricsOnce.Do(func() {
 		globalPerfMetrics = &perfMetrics{
-		PrepareProposalStepSeconds: prommetrics.NewHistogramFrom(stdprometheus.HistogramOpts{
-			Namespace: namespace,
-			Subsystem: metricsSubsystem,
-			Name:      "prepare_proposal_step_seconds",
-			Help:      "Sub-step durations inside BaseApp.PrepareProposal.",
-			Buckets:   []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 3, 5},
-		}, []string{"step"}),
+			PrepareProposalStepSeconds: prommetrics.NewHistogramFrom(stdprometheus.HistogramOpts{
+				Namespace: namespace,
+				Subsystem: metricsSubsystem,
+				Name:      "prepare_proposal_step_seconds",
+				Help:      "Sub-step durations inside BaseApp.PrepareProposal.",
+				Buckets:   []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 3, 5},
+			}, []string{"step"}),
 
-		InternalFinalizeBlockStepSeconds: prommetrics.NewHistogramFrom(stdprometheus.HistogramOpts{
-			Namespace: namespace,
-			Subsystem: metricsSubsystem,
-			Name:      "internal_finalize_block_step_seconds",
-			Help:      "Sub-step durations inside internalFinalizeBlock.",
-			Buckets:   []float64{0.1, 0.25, 0.5, 1, 2, 3, 4, 5, 6, 7, 8},
-		}, []string{"step"}),
+			InternalFinalizeBlockStepSeconds: prommetrics.NewHistogramFrom(stdprometheus.HistogramOpts{
+				Namespace: namespace,
+				Subsystem: metricsSubsystem,
+				Name:      "internal_finalize_block_step_seconds",
+				Help:      "Sub-step durations inside internalFinalizeBlock.",
+				Buckets:   []float64{0.1, 0.25, 0.5, 1, 2, 3, 4, 5, 6, 7, 8},
+			}, []string{"step"}),
 
-		ExecuteTxsStepSeconds: prommetrics.NewHistogramFrom(stdprometheus.HistogramOpts{
-			Namespace: namespace,
-			Subsystem: metricsSubsystem,
-			Name:      "execute_txs_step_seconds",
-			Help:      "Per-block cumulative time for ante / msgs / post handlers across all txs.",
-			Buckets:   []float64{0.1, 0.25, 0.5, 1, 2, 3, 4, 5, 6, 7, 8},
-		}, []string{"step"}),
+			ExecuteTxsStepSeconds: prommetrics.NewHistogramFrom(stdprometheus.HistogramOpts{
+				Namespace: namespace,
+				Subsystem: metricsSubsystem,
+				Name:      "execute_txs_step_seconds",
+				Help:      "Per-block cumulative time for ante / msgs / post handlers across all txs.",
+				Buckets:   []float64{0.1, 0.25, 0.5, 1, 2, 3, 4, 5, 6, 7, 8},
+			}, []string{"step"}),
 
-		FinalizeBlockStepSeconds: prommetrics.NewHistogramFrom(stdprometheus.HistogramOpts{
-			Namespace: namespace,
-			Subsystem: metricsSubsystem,
-			Name:      "finalize_block_step_seconds",
-			Help:      "Sub-step durations inside FinalizeBlock (OE path and non-OE path).",
-			Buckets:   []float64{0.1, 0.5, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 15},
-		}, []string{"step"}),
+			FinalizeBlockStepSeconds: prommetrics.NewHistogramFrom(stdprometheus.HistogramOpts{
+				Namespace: namespace,
+				Subsystem: metricsSubsystem,
+				Name:      "finalize_block_step_seconds",
+				Help:      "Sub-step durations inside FinalizeBlock (OE path and non-OE path).",
+				Buckets:   []float64{0.1, 0.5, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 15},
+			}, []string{"step"}),
 
-		BaseAppCommitStepSeconds: prommetrics.NewHistogramFrom(stdprometheus.HistogramOpts{
-			Namespace: namespace,
-			Subsystem: "baseapp_commit",
-			Name:      "step_seconds",
-			Help:      "BaseApp Commit sub-step durations (total / cms_commit).",
-			Buckets:   []float64{0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 1, 1.5, 2},
-		}, []string{"step"}),
-	}
+			BaseAppCommitStepSeconds: prommetrics.NewHistogramFrom(stdprometheus.HistogramOpts{
+				Namespace: namespace,
+				Subsystem: "baseapp_commit",
+				Name:      "step_seconds",
+				Help:      "BaseApp Commit sub-step durations (total / cms_commit).",
+				Buckets:   []float64{0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 1, 1.5, 2},
+			}, []string{"step"}),
+
+			CheckTxStepSeconds: prommetrics.NewHistogramFrom(stdprometheus.HistogramOpts{
+				Namespace: namespace,
+				Subsystem: metricsSubsystem,
+				Name:      "check_tx_step_seconds",
+				Help:      "Per-transaction CheckTx durations for total ABCI CheckTx and internal runTx.",
+				Buckets:   []float64{0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2},
+			}, []string{"step"}),
+
+			CheckTxHeightWindow: prommetrics.NewGaugeFrom(stdprometheus.GaugeOpts{
+				Namespace: namespace,
+				Subsystem: metricsSubsystem,
+				Name:      "check_tx_height_window",
+				Help:      "Last flushed CheckTx aggregation window keyed by checkState height. Height is exported as a value to avoid high-cardinality labels.",
+			}, []string{"kind"}),
+		}
 	})
 	return globalPerfMetrics
 }
-
