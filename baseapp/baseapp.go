@@ -226,7 +226,17 @@ type BaseApp struct {
 
 	// perfMetrics holds custom Prometheus performance histograms.
 	// Populated by PrometheusMetrics option; defaults to no-op.
-	perfMetrics *perfMetrics
+	perfMetrics      *perfMetrics
+	checkTxMetricsMu sync.Mutex
+	checkTxMetrics   checkTxMetricsWindow
+}
+
+type checkTxMetricsWindow struct {
+	height       int64
+	count        uint64
+	totalSeconds float64
+	runTxSeconds float64
+	initialized  bool
 }
 
 // NewBaseApp returns a reference to an initialized BaseApp. It accepts a

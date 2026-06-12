@@ -337,6 +337,7 @@ func (app *BaseApp) ApplySnapshotChunk(req *abci.ApplySnapshotChunkRequest) (*ab
 // will contain relevant error information. Regardless of tx execution outcome,
 // the CheckTxResponse will contain relevant gas execution context.
 func (app *BaseApp) CheckTx(req *abci.CheckTxRequest) (*abci.CheckTxResponse, error) {
+	checkTxStart := time.Now()
 	var mode execMode
 
 	switch {
@@ -350,8 +351,25 @@ func (app *BaseApp) CheckTx(req *abci.CheckTxRequest) (*abci.CheckTxResponse, er
 		return nil, fmt.Errorf("unknown CheckTxRequest type: %s", req.Type)
 	}
 
+	recordMetrics := mode == execModeCheck
+	height := app.checkTxMetricsHeight()
+	var runTxSeconds float64
+	defer func() {
+		if !recordMetrics {
+			return
+		}
+		totalSeconds := time.Since(checkTxStart).Seconds()
+		app.perfMetrics.CheckTxStepSeconds.With("step", "total").Observe(totalSeconds)
+		app.recordCheckTxMetrics(height, totalSeconds, runTxSeconds)
+	}()
+
 	if app.checkTxHandler == nil {
+		runTxStart := time.Now()
 		gInfo, result, anteEvents, err := app.runTx(mode, req.Tx, nil)
+		if recordMetrics {
+			runTxSeconds += time.Since(runTxStart).Seconds()
+			app.perfMetrics.CheckTxStepSeconds.With("step", "run_tx").Observe(runTxSeconds)
+		}
 		if err != nil {
 			return sdkerrors.CheckTxResponseWithEvents(err, gInfo.GasWanted, gInfo.GasUsed, anteEvents, app.trace), nil
 		}
@@ -371,6 +389,51 @@ func (app *BaseApp) CheckTx(req *abci.CheckTxRequest) (*abci.CheckTxResponse, er
 	}
 
 	return app.checkTxHandler(runTx, req)
+}
+
+func (app *BaseApp) checkTxMetricsHeight() int64 {
+	if app.checkState == nil {
+		return app.LastBlockHeight()
+	}
+	return app.checkState.Context().BlockHeight()
+}
+
+func (app *BaseApp) recordCheckTxMetrics(height int64, totalSeconds, runTxSeconds float64) {
+	app.checkTxMetricsMu.Lock()
+	defer app.checkTxMetricsMu.Unlock()
+
+	if !app.checkTxMetrics.initialized {
+		app.checkTxMetrics.height = height
+		app.checkTxMetrics.initialized = true
+	} else if app.checkTxMetrics.height != height {
+		app.flushCheckTxMetricsLocked()
+		app.checkTxMetrics.height = height
+	}
+
+	app.checkTxMetrics.count++
+	app.checkTxMetrics.totalSeconds += totalSeconds
+	app.checkTxMetrics.runTxSeconds += runTxSeconds
+}
+
+func (app *BaseApp) flushCheckTxMetrics() {
+	app.checkTxMetricsMu.Lock()
+	defer app.checkTxMetricsMu.Unlock()
+	app.flushCheckTxMetricsLocked()
+}
+
+func (app *BaseApp) flushCheckTxMetricsLocked() {
+	if !app.checkTxMetrics.initialized || app.checkTxMetrics.count == 0 {
+		return
+	}
+
+	app.perfMetrics.CheckTxHeightWindow.With("kind", "height").Set(float64(app.checkTxMetrics.height))
+	app.perfMetrics.CheckTxHeightWindow.With("kind", "count").Set(float64(app.checkTxMetrics.count))
+	app.perfMetrics.CheckTxHeightWindow.With("kind", "total_seconds").Set(app.checkTxMetrics.totalSeconds)
+	app.perfMetrics.CheckTxHeightWindow.With("kind", "run_tx_seconds").Set(app.checkTxMetrics.runTxSeconds)
+
+	app.checkTxMetrics.count = 0
+	app.checkTxMetrics.totalSeconds = 0
+	app.checkTxMetrics.runTxSeconds = 0
 }
 
 // PrepareProposal implements the PrepareProposal ABCI method and returns a
@@ -1040,6 +1103,7 @@ func (app *BaseApp) Commit() (*abci.CommitResponse, error) {
 	commitStart := time.Now()
 	header := app.finalizeBlockState.Context().BlockHeader()
 	retainHeight := app.GetBlockRetentionHeight(header.Height)
+	app.flushCheckTxMetrics()
 
 	if app.precommiter != nil {
 		app.precommiter(app.finalizeBlockState.Context())
