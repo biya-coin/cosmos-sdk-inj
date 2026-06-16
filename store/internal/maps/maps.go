@@ -7,6 +7,7 @@ import (
 	"github.com/cometbft/cometbft/crypto/merkle"
 	"github.com/cometbft/cometbft/crypto/tmhash"
 
+	"cosmossdk.io/store/internal/conv"
 	"cosmossdk.io/store/internal/kv"
 	"cosmossdk.io/store/internal/tree"
 )
@@ -90,7 +91,7 @@ func newSimpleMap() *simpleMap {
 // Set creates a kv pair of the key and the hash of the value,
 // and then appends it to SimpleMap's kv pairs.
 func (sm *simpleMap) Set(key string, value []byte) {
-	byteKey := []byte(key)
+	byteKey := conv.UnsafeStrToBytes(key)
 	assertValidKey(byteKey)
 	sm.sorted = false
 
@@ -130,6 +131,17 @@ func (sm *simpleMap) KVPairs() kv.Pairs {
 
 	copy(kvs.Pairs, sm.Kvs.Pairs)
 	return kvs
+}
+
+func (sm *simpleMap) RootOnlyHash() []byte {
+	sm.Sort()
+
+	kvsBytes := make([][]byte, len(sm.Kvs.Pairs))
+	for i, kvp := range sm.Kvs.Pairs {
+		kvsBytes[i] = KVPair(kvp).Bytes()
+	}
+
+	return tree.HashFromByteSlices(kvsBytes)
 }
 
 //----------------------------------------
@@ -207,6 +219,14 @@ func ProofsFromMap(m map[string][]byte) ([]byte, map[string]*cmtprotocrypto.Proo
 	}
 
 	return rootHash, proofs, keys
+}
+
+func RootHashFromMap(m map[string][]byte) []byte {
+	sm := newSimpleMap()
+	for k, v := range m {
+		sm.Set(k, v)
+	}
+	return sm.RootOnlyHash()
 }
 
 func assertValidKey(key []byte) {

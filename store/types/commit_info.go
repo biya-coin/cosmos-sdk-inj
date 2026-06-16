@@ -2,11 +2,17 @@ package types
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
+	"sort"
 
 	cmtprotocrypto "github.com/cometbft/cometbft/api/cometbft/crypto/v1"
+	"github.com/cometbft/cometbft/crypto/tmhash"
 
-	"cosmossdk.io/store/internal/maps"
+	"cosmossdk.io/store/internal/conv"
+	"cosmossdk.io/store/internal/tree"
 )
+
+var emptyCommitInfoHash = sha256.Sum256(nil)
 
 // GetHash returns the GetHash from the CommitID.
 // This is used in CommitInfo.Hash()
@@ -30,19 +36,29 @@ func (ci CommitInfo) toMap() map[string][]byte {
 
 // Hash returns the simple merkle root hash of the stores sorted by name.
 func (ci CommitInfo) Hash() []byte {
-	// we need a special case for empty set, as SimpleProofsFromMap requires at least one entry
 	if len(ci.StoreInfos) == 0 {
-		emptyHash := sha256.Sum256([]byte{})
-		return emptyHash[:]
+		return emptyCommitInfoHash[:]
 	}
 
-	rootHash, _, _ := maps.ProofsFromMap(ci.toMap())
+	storeInfos := ci.StoreInfos
+	if !sort.SliceIsSorted(storeInfos, func(i, j int) bool {
+		return storeInfos[i].Name < storeInfos[j].Name
+	}) {
+		storeInfos = append([]StoreInfo(nil), storeInfos...)
+		sort.SliceStable(storeInfos, func(i, j int) bool {
+			return storeInfos[i].Name < storeInfos[j].Name
+		})
+	}
 
+	kvsBytes := make([][]byte, len(storeInfos))
+	for i, storeInfo := range storeInfos {
+		kvsBytes[i] = commitInfoPairBytes(storeInfo.Name, storeInfo.GetHash())
+	}
+
+	rootHash := tree.HashFromByteSlices(kvsBytes)
 	if len(rootHash) == 0 {
-		emptyHash := sha256.Sum256([]byte{})
-		return emptyHash[:]
+		return emptyCommitInfoHash[:]
 	}
-
 	return rootHash
 }
 
@@ -59,4 +75,20 @@ func (ci CommitInfo) CommitID() CommitID {
 		Version: ci.Version,
 		Hash:    ci.Hash(),
 	}
+}
+
+func commitInfoPairBytes(name string, value []byte) []byte {
+	key := conv.UnsafeStrToBytes(name)
+	valueHash := tmhash.Sum(value)
+
+	var lenBuf [binary.MaxVarintLen64]byte
+	keyLen := binary.PutUvarint(lenBuf[:], uint64(len(key)))
+	valueLen := binary.PutUvarint(lenBuf[keyLen:], uint64(len(valueHash)))
+
+	out := make([]byte, keyLen+len(key)+valueLen+len(valueHash))
+	n := copy(out, lenBuf[:keyLen])
+	n += copy(out[n:], key)
+	n += copy(out[n:], lenBuf[keyLen:keyLen+valueLen])
+	copy(out[n:], valueHash)
+	return out
 }

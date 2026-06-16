@@ -5,8 +5,21 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"hash"
 	"io"
+	"sync"
 )
+
+type resetHash interface {
+	hash.Hash
+	Reset()
+}
+
+var sha256Pool = sync.Pool{
+	New: func() any {
+		return sha256.New()
+	},
+}
 
 // Node interface encapsulate the interface of both PersistedNode and MemNode.
 type Node interface {
@@ -180,7 +193,9 @@ func HashNode(node Node) []byte {
 	if node == nil {
 		return nil
 	}
-	h := sha256.New()
+	h := sha256Pool.Get().(resetHash)
+	h.Reset()
+	defer sha256Pool.Put(h)
 	if err := writeHashBytes(node, h); err != nil {
 		panic(err)
 	}
