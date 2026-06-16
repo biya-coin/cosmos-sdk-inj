@@ -2,8 +2,8 @@ package iavl
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"fmt"
+	"io"
 	"math"
 	"sync"
 
@@ -64,7 +64,9 @@ func (pin ProofInnerNode) stringIndented(indent string) string {
 }
 
 func (pin ProofInnerNode) Hash(childHash []byte) ([]byte, error) {
-	hasher := sha256.New()
+	hasher := sha256Pool.Get().(resetHash)
+	hasher.Reset()
+	defer sha256Pool.Put(hasher)
 
 	buf := bufPool.Get().(*bytes.Buffer)
 	buf.Reset()
@@ -102,8 +104,7 @@ func (pin ProofInnerNode) Hash(childHash []byte) ([]byte, error) {
 		return nil, fmt.Errorf("failed to hash ProofInnerNode: %v", err)
 	}
 
-	_, err = hasher.Write(buf.Bytes())
-	if err != nil {
+	if _, err := io.Copy(hasher, buf); err != nil {
 		return nil, err
 	}
 	return hasher.Sum(nil), nil
@@ -162,7 +163,9 @@ func (pln ProofLeafNode) stringIndented(indent string) string {
 }
 
 func (pln ProofLeafNode) Hash() ([]byte, error) {
-	hasher := sha256.New()
+	hasher := sha256Pool.Get().(resetHash)
+	hasher.Reset()
+	defer sha256Pool.Put(hasher)
 
 	buf := bufPool.Get().(*bytes.Buffer)
 	buf.Reset()
@@ -184,8 +187,7 @@ func (pln ProofLeafNode) Hash() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to hash ProofLeafNode: %v", err)
 	}
-	_, err = hasher.Write(buf.Bytes())
-	if err != nil {
+	if _, err := io.Copy(hasher, buf); err != nil {
 		return nil, err
 
 	}

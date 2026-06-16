@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"fmt"
+	"hash"
 	"io"
 	"math"
 	"sync"
@@ -16,6 +17,17 @@ import (
 
 	"cosmossdk.io/store/seidb/sc/sei-iavl/internal/encoding"
 )
+
+type resetHash interface {
+	hash.Hash
+	Reset()
+}
+
+var sha256Pool = sync.Pool{
+	New: func() any {
+		return sha256.New()
+	},
+}
 
 // Node represents a node in a Tree.
 type Node struct {
@@ -386,13 +398,17 @@ func (node *Node) _hash() ([]byte, error) {
 		return node.GetHash(), nil
 	}
 
-	h := sha256.New()
-	buf := new(bytes.Buffer)
+	h := sha256Pool.Get().(resetHash)
+	h.Reset()
+	defer sha256Pool.Put(h)
+
+	buf := bufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer bufPool.Put(buf)
 	if err := node.writeHashBytes(buf); err != nil {
 		return nil, err
 	}
-	_, err := h.Write(buf.Bytes())
-	if err != nil {
+	if _, err := io.Copy(h, buf); err != nil {
 		return nil, err
 	}
 	node.mtx.Lock()
@@ -414,14 +430,18 @@ func (node *Node) hashWithCount() ([]byte, int64, error) {
 		return node.GetHash(), 0, nil
 	}
 
-	h := sha256.New()
-	buf := new(bytes.Buffer)
+	h := sha256Pool.Get().(resetHash)
+	h.Reset()
+	defer sha256Pool.Put(h)
+
+	buf := bufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer bufPool.Put(buf)
 	hashCount, err := node.writeHashBytesRecursively(buf)
 	if err != nil {
 		return nil, 0, err
 	}
-	_, err = h.Write(buf.Bytes())
-	if err != nil {
+	if _, err := io.Copy(h, buf); err != nil {
 		return nil, 0, err
 	}
 	node.mtx.Lock()
