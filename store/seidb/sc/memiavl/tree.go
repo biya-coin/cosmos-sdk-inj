@@ -157,7 +157,10 @@ func (t *Tree) Set(key, value []byte) {
 		// the value could be nil when replaying changes from write-ahead-log because of protobuf decoding
 		value = []byte{}
 	}
-	t.root, _ = setRecursive(t.root, key, value, t.version+1, t.cowVersion)
+	newRoot, _, changed := setRecursive(t.root, key, value, t.version+1, t.cowVersion)
+	if changed {
+		t.root = newRoot
+	}
 }
 
 func (t *Tree) Remove(key []byte) {

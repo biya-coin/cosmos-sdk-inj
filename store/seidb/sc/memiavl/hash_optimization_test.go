@@ -30,6 +30,17 @@ func TestMemNodeHashCacheStable(t *testing.T) {
 	require.True(t, leaf.valueHashValid)
 }
 
+func TestSetRecursiveSameValueSameVersionDoesNotInvalidateHash(t *testing.T) {
+	leaf := newLeafNode([]byte("hello"), []byte("world"), 7)
+	originalHash := append([]byte(nil), leaf.Hash()...)
+
+	next, updated, changed := setRecursive(leaf, []byte("hello"), []byte("world"), 7, 0)
+	require.True(t, updated)
+	require.False(t, changed)
+	require.Same(t, leaf, next)
+	require.Equal(t, originalHash, next.Hash())
+}
+
 func BenchmarkHashNodeLeaf(b *testing.B) {
 	node := newLeafNode([]byte("hello"), []byte("world"), 7)
 	for i := 0; i < b.N; i++ {

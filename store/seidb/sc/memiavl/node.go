@@ -51,14 +51,19 @@ type Node interface {
 	GetByIndex(uint32) ([]byte, []byte)
 }
 
-// setRecursive do set operation.
-// it always do modification and return new `MemNode`, even if the value is the same.
-// also returns if it's an update or insertion, if updated, the tree height and balance is not changed.
-func setRecursive(node Node, key, value []byte, version, cowVersion uint32) (*MemNode, bool) {
+// setRecursive performs a set operation and returns:
+//   - the resulting subtree node
+//   - whether an existing key was updated (shape unchanged)
+//   - whether the subtree content visible to hashing actually changed
+//
+// Note: writing the same value in a new version is still a semantic change because node.Version()
+// participates in hashing. The only no-op case is writing the same value to a node that is already
+// at the target version within the current working tree.
+func setRecursive(node Node, key, value []byte, version, cowVersion uint32) (Node, bool, bool) {
 	if node == nil {
 		leafNode := newLeafNode(key, value, version)
 		IncrementMemNodeSize(leafNode)
-		return leafNode, true
+		return leafNode, false, true
 	}
 
 	nodeKey := node.Key()
@@ -67,29 +72,46 @@ func setRecursive(node Node, key, value []byte, version, cowVersion uint32) (*Me
 		case -1:
 			branchNode := newBranchNode(1, 2, version, nodeKey, newLeafNode(key, value, version), node)
 			IncrementMemNodeSize(branchNode)
-			return branchNode, false
+			return branchNode, false, true
 		case 1:
 			branchNode := newBranchNode(1, 2, version, key, node, newLeafNode(key, value, version))
 			IncrementMemNodeSize(branchNode)
-			return branchNode, false
+			return branchNode, false, true
 		default:
+			if node.Version() == version && bytes.Equal(node.Value(), value) {
+				return node, true, false
+			}
 			newNode := node.Mutate(version, cowVersion)
-			newNode.value = value
-			return newNode, true
+			if !bytes.Equal(newNode.value, value) {
+				newNode.value = value
+				newNode.valueHashValid = false
+			}
+			return newNode, true, true
 		}
 	} else {
 		var (
-			newChild, newNode *MemNode
-			updated           bool
+			newChild         Node
+			newNode          *MemNode
+			updated, changed bool
 		)
 		if bytes.Compare(key, nodeKey) == -1 {
-			newChild, updated = setRecursive(node.Left(), key, value, version, cowVersion)
+			newChild, updated, changed = setRecursive(node.Left(), key, value, version, cowVersion)
+			if !changed {
+				return node, updated, false
+			}
 			newNode = node.Mutate(version, cowVersion)
 			newNode.left = newChild
 		} else {
-			newChild, updated = setRecursive(node.Right(), key, value, version, cowVersion)
+			newChild, updated, changed = setRecursive(node.Right(), key, value, version, cowVersion)
+			if !changed {
+				return node, updated, false
+			}
 			newNode = node.Mutate(version, cowVersion)
 			newNode.right = newChild
+		}
+
+		if updated {
+			return newNode, true, true
 		}
 
 		if !updated {
@@ -97,7 +119,7 @@ func setRecursive(node Node, key, value []byte, version, cowVersion uint32) (*Me
 			newNode = newNode.reBalance(version, cowVersion)
 		}
 
-		return newNode, updated
+		return newNode, updated, true
 	}
 }
 
