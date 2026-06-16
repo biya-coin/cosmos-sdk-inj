@@ -21,6 +21,13 @@ var sha256Pool = sync.Pool{
 	},
 }
 
+var fixedMetaBufPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, 3*binary.MaxVarintLen64)
+		return &buf
+	},
+}
+
 // Node interface encapsulate the interface of both PersistedNode and MemNode.
 type Node interface {
 	Height() uint8
@@ -144,22 +151,15 @@ func removeRecursive(node Node, key []byte, version, cowVersion uint32) ([]byte,
 // Writes the node's hash to the given `io.Writer`. This function recursively calls
 // children to update hashes.
 func writeHashBytes(node Node, w io.Writer) error {
-	var (
-		n   int
-		buf [binary.MaxVarintLen64]byte
-	)
+	bufp := fixedMetaBufPool.Get().(*[]byte)
+	buf := *bufp
+	defer fixedMetaBufPool.Put(bufp)
 
-	n = binary.PutVarint(buf[:], int64(node.Height()))
-	if _, err := w.Write(buf[0:n]); err != nil {
+	n := binary.PutVarint(buf, int64(node.Height()))
+	n += binary.PutVarint(buf[n:], node.Size())
+	n += binary.PutVarint(buf[n:], int64(node.Version()))
+	if _, err := w.Write(buf[:n]); err != nil {
 		return fmt.Errorf("writing height, %w", err)
-	}
-	n = binary.PutVarint(buf[:], node.Size())
-	if _, err := w.Write(buf[0:n]); err != nil {
-		return fmt.Errorf("writing size, %w", err)
-	}
-	n = binary.PutVarint(buf[:], int64(node.Version()))
-	if _, err := w.Write(buf[0:n]); err != nil {
-		return fmt.Errorf("writing version, %w", err)
 	}
 
 	// Key is not written for inner nodes, unlike writeBytes.
@@ -171,9 +171,9 @@ func writeHashBytes(node Node, w io.Writer) error {
 
 		// Indirection needed to provide proofs without values.
 		// (e.g. ProofLeafNode.ValueHash)
-		valueHash := sha256.Sum256(node.Value())
+		valueHash := nodeValueHash(node)
 
-		if err := EncodeBytes(w, valueHash[:]); err != nil {
+		if err := EncodeBytes(w, valueHash); err != nil {
 			return fmt.Errorf("writing value, %w", err)
 		}
 	} else {
@@ -200,6 +200,27 @@ func HashNode(node Node) []byte {
 		panic(err)
 	}
 	return h.Sum(nil)
+}
+
+func sumHashNode(dst *[sha256.Size]byte, node Node) {
+	h := sha256Pool.Get().(resetHash)
+	h.Reset()
+	defer sha256Pool.Put(h)
+
+	if err := writeHashBytes(node, h); err != nil {
+		panic(err)
+	}
+
+	sum := h.Sum((*dst)[:0])
+	copy(dst[:], sum)
+}
+
+func nodeValueHash(node Node) []byte {
+	if memNode, ok := node.(*MemNode); ok {
+		return memNode.leafValueHash()
+	}
+	valueHash := sha256.Sum256(node.Value())
+	return valueHash[:]
 }
 
 // VerifyHash compare node's cached hash with computed one

@@ -2,6 +2,7 @@ package memiavl
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"io"
 	"math"
@@ -17,7 +18,10 @@ type MemNode struct {
 	value   []byte
 	left    Node
 	right   Node
-	hash    []byte
+	hash           [sha256.Size]byte
+	hashValid      bool
+	valueHash      [sha256.Size]byte
+	valueHashValid bool
 }
 
 var _ Node = (*MemNode)(nil)
@@ -57,7 +61,6 @@ func IncrementMemNodeSize(node *MemNode) {
 		// backing arrays for the slices (bytes)
 		size += int64(cap(node.key))
 		size += int64(cap(node.value))
-		size += int64(cap(node.hash))
 		TotalMemNodeSize.Add(size)
 		TotalNumOfMemNode.Add(1)
 	}
@@ -103,7 +106,7 @@ func (node *MemNode) Mutate(version, cowVersion uint32) *MemNode {
 		n = &cloned
 	}
 	n.version = version
-	n.hash = nil
+	n.hashValid = false
 	return n
 }
 
@@ -117,11 +120,21 @@ func (node *MemNode) Hash() []byte {
 	if node == nil {
 		return nil
 	}
-	if node.hash != nil {
-		return node.hash
+	if node.hashValid {
+		return node.hash[:]
 	}
-	node.hash = HashNode(node)
-	return node.hash
+	sumHashNode(&node.hash, node)
+	node.hashValid = true
+	return node.hash[:]
+}
+
+func (node *MemNode) leafValueHash() []byte {
+	if node.valueHashValid {
+		return node.valueHash[:]
+	}
+	node.valueHash = sha256.Sum256(node.value)
+	node.valueHashValid = true
+	return node.valueHash[:]
 }
 
 func (node *MemNode) updateHeightSize() {
