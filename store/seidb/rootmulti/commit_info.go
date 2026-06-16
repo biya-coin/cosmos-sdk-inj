@@ -54,3 +54,39 @@ func convertCommitInfo(commitInfo *scproto.CommitInfo) *types.CommitInfo {
 		StoreInfos: storeInfos,
 	}
 }
+
+func buildWorkingCommitInfoFromStores(storeInfos []types.StoreInfo, storeParams map[types.StoreKey]storeParams) *types.CommitInfo {
+	infos := make([]types.StoreInfo, 0, len(storeInfos)+len(storeParams))
+	infos = append(infos, storeInfos...)
+	for key := range storeParams {
+		typ := storeParams[key].typ
+		if typ != types.StoreTypeIAVL && typ != types.StoreTypeTransient {
+			infos = append(infos, types.StoreInfo{
+				Name:     key.Name(),
+				CommitId: types.CommitID{},
+			})
+		}
+	}
+	sort.SliceStable(infos, func(i, j int) bool {
+		return infos[i].Name < infos[j].Name
+	})
+	return &types.CommitInfo{StoreInfos: infos}
+}
+
+func buildWorkingCommitInfoFromRuntimeStores(storeInfos []types.StoreInfo, storeParams map[types.StoreKey]runtimeStoreParams) *types.CommitInfo {
+	infos := make([]types.StoreInfo, 0, len(storeInfos)+len(storeParams))
+	infos = append(infos, storeInfos...)
+	for key := range storeParams {
+		typ := storeParams[key].typ
+		if typ != types.StoreTypeIAVL && typ != types.StoreTypeTransient {
+			infos = append(infos, types.StoreInfo{
+				Name:     key.Name(),
+				CommitId: types.CommitID{},
+			})
+		}
+	}
+	sort.SliceStable(infos, func(i, j int) bool {
+		return infos[i].Name < infos[j].Name
+	})
+	return &types.CommitInfo{StoreInfos: infos}
+}

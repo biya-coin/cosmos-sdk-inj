@@ -136,7 +136,8 @@ func (s *Store) WorkingHash() []byte {
 		defer s.mtx.RUnlock()
 		if src, ok := s.scStore.(*memIAVLStore); ok {
 			workingCommitInfoStart := time.Now()
-			ci := amendCommitInfo(convertCommitInfo(src.WorkingCommitInfo()), s.storesParams)
+			base := convertCommitInfo(src.WorkingCommitInfo())
+			ci := buildWorkingCommitInfoFromStores(base.StoreInfos, s.storesParams)
 			hash := ci.Hash()
 			monitor.LogSeidbWorkingHashTiming(s.lastCommitInfo.Version, float64(time.Since(workingCommitInfoStart).Nanoseconds())/1e6)
 			return hash

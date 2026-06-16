@@ -491,10 +491,7 @@ func (rs *storev2Runtime) WorkingHash() []byte {
 			})
 		}
 	}
-	sort.SliceStable(storeInfos, func(i, j int) bool {
-		return storeInfos[i].Name < storeInfos[j].Name
-	})
-	return types.CommitInfo{StoreInfos: storeInfos}.Hash()
+	return buildWorkingCommitInfoFromRuntimeStores(storeInfos, rs.storesParams).Hash()
 }
 
 func (rs *storev2Runtime) CacheWrap() types.CacheWrap {

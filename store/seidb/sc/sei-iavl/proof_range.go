@@ -110,8 +110,7 @@ func (proof *RangeProof) VerifyItem(key, value []byte) error {
 		return errors.Wrap(ErrInvalidProof, "leaf key not found in proof")
 	}
 
-	h := sha256.Sum256(value)
-	valueHash := h[:]
+	valueHash := hashValue(value)
 	if !bytes.Equal(leaves[i].ValueHash, valueHash) {
 		return errors.Wrap(ErrInvalidProof, "leaf value hash not same")
 	}
@@ -415,11 +414,10 @@ func (t *ImmutableTree) getRangeProof(keyStart, keyEnd []byte, limit int) (proof
 		values = append(values, left.GetValue())
 	}
 
-	h := sha256.Sum256(left.GetValue())
 	var leaves = []ProofLeafNode{
 		{
 			Key:       left.GetNodeKey(),
-			ValueHash: h[:],
+			ValueHash: hashValue(left.GetValue()),
 			Version:   left.GetVersion(),
 		},
 	}
@@ -478,10 +476,9 @@ func (t *ImmutableTree) getRangeProof(keyStart, keyEnd []byte, limit int) (proof
 				// Start a new one to track as we traverse the tree.
 				currentPathToLeaf = PathToLeaf(nil)
 
-				h := sha256.Sum256(node.GetValue())
 				leaves = append(leaves, ProofLeafNode{
 					Key:       node.GetNodeKey(),
-					ValueHash: h[:],
+					ValueHash: hashValue(node.GetValue()),
 					Version:   node.GetVersion(),
 				})
 
@@ -531,6 +528,11 @@ func (t *ImmutableTree) getRangeProof(keyStart, keyEnd []byte, limit int) (proof
 		InnerNodes: allPathToLeafs,
 		Leaves:     leaves,
 	}, keys, values, nil
+}
+
+func hashValue(value []byte) []byte {
+	sum := sha256.Sum256(value)
+	return sum[:]
 }
 
 //----------------------------------------
