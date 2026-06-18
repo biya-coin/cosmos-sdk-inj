@@ -61,6 +61,12 @@ type perfMetrics struct {
 	// Labels: step = total | run_tx
 	CheckTxStepSeconds cmtmetrics.Histogram
 
+	// CheckTx runTx sub-step durations.
+	// Labels: step = ctx_init | tx_decode | get_msgs | validate_basic | route_lookup |
+	// ante_cache_context | ante_handler | ante_cache_write | ante_events_to_abci |
+	// mempool_insert | runmsg_cache_context | get_msgs_v2 | run_msgs | post_handler
+	CheckTxRunTxSubstepSeconds cmtmetrics.Histogram
+
 	// ── CheckTx 按 checkState 高度聚合的上一高度区间统计 ────────────────
 	// Labels: kind = total_seconds | run_tx_seconds | count | height
 	CheckTxHeightWindow cmtmetrics.Gauge
@@ -118,6 +124,14 @@ func newPrometheusMetrics(namespace string) *perfMetrics {
 				Name:      "check_tx_step_seconds",
 				Help:      "Per-transaction CheckTx durations for total ABCI CheckTx and internal runTx.",
 				Buckets:   []float64{0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2},
+			}, []string{"step"}),
+
+			CheckTxRunTxSubstepSeconds: prommetrics.NewHistogramFrom(stdprometheus.HistogramOpts{
+				Namespace: namespace,
+				Subsystem: metricsSubsystem,
+				Name:      "check_tx_run_tx_substep_seconds",
+				Help:      "Per-transaction CheckTx runTx sub-step durations.",
+				Buckets:   []float64{0.00001, 0.00005, 0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1},
 			}, []string{"step"}),
 
 			CheckTxHeightWindow: prommetrics.NewGaugeFrom(stdprometheus.GaugeOpts{

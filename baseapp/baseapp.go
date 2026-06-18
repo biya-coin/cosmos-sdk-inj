@@ -900,6 +900,14 @@ func (app *BaseApp) runTx(mode execMode, txBytes []byte, tx sdk.Tx) (gInfo sdk.G
 // Safe because tx execution inside FinalizeBlock is sequential.
 var blockTxAnteMs, blockTxMsgsMs, blockTxPostMs float64
 
+func (app *BaseApp) observeCheckTxRunTxSubstep(mode execMode, step string, start time.Time) {
+	if mode != execModeCheck {
+		return
+	}
+
+	app.perfMetrics.CheckTxRunTxSubstepSeconds.With("step", step).Observe(time.Since(start).Seconds())
+}
+
 func (app *BaseApp) runTxWithMultiStore(
 	mode execMode,
 	txBytes []byte,
@@ -913,11 +921,13 @@ func (app *BaseApp) runTxWithMultiStore(
 	// meter, so we initialize upfront.
 	var gasWanted uint64
 
+	tCtxInit := time.Now()
 	ctx := app.getContextForTx(mode, txBytes, txIndex)
 	if txMultiStore != nil {
 		ctx = ctx.WithMultiStore(txMultiStore)
 	}
 	ms := ctx.MultiStore()
+	app.observeCheckTxRunTxSubstep(mode, "ctx_init", tCtxInit)
 
 	// only run the tx if there is block gas remaining
 	if mode == execModeFinalize && ctx.BlockGasMeter().IsOutOfGas() {
@@ -960,27 +970,37 @@ func (app *BaseApp) runTxWithMultiStore(
 
 	// if the transaction is not decoded, decode it here
 	if tx == nil {
+		tTxDecode := time.Now()
 		tx, err = app.txDecoder(txBytes)
+		app.observeCheckTxRunTxSubstep(mode, "tx_decode", tTxDecode)
 		if err != nil {
 			return sdk.GasInfo{}, nil, nil, err
 		}
 	}
 
+	tGetMsgs := time.Now()
 	msgs := tx.GetMsgs()
+	app.observeCheckTxRunTxSubstep(mode, "get_msgs", tGetMsgs)
 	// run validate basic if mode != recheck.
 	// as validate basic is stateless, it is guaranteed to pass recheck, given that its passed checkTx.
 	if mode != execModeReCheck {
+		tValidateBasic := time.Now()
 		if err := validateBasicTxMsgs(msgs); err != nil {
+			app.observeCheckTxRunTxSubstep(mode, "validate_basic", tValidateBasic)
 			return sdk.GasInfo{}, nil, nil, err
 		}
+		app.observeCheckTxRunTxSubstep(mode, "validate_basic", tValidateBasic)
 	}
 
+	tRouteLookup := time.Now()
 	for _, msg := range msgs {
 		handler := app.msgServiceRouter.Handler(msg)
 		if handler == nil {
+			app.observeCheckTxRunTxSubstep(mode, "route_lookup", tRouteLookup)
 			return sdk.GasInfo{}, nil, nil, errorsmod.Wrapf(sdkerrors.ErrUnknownRequest, "no message handler found for %T", msg)
 		}
 	}
+	app.observeCheckTxRunTxSubstep(mode, "route_lookup", tRouteLookup)
 
 	if app.anteHandler != nil {
 		var (
@@ -995,10 +1015,13 @@ func (app *BaseApp) runTxWithMultiStore(
 		// NOTE: Alternatively, we could require that AnteHandler ensures that
 		// writes do not happen if aborted/failed.  This may have some
 		// performance benefits, but it'll be more difficult to get right.
+		tAnteCacheContext := time.Now()
 		anteCtx, msCache = app.cacheTxContext(ctx, txBytes)
+		app.observeCheckTxRunTxSubstep(mode, "ante_cache_context", tAnteCacheContext)
 		anteCtx = anteCtx.WithEventManager(sdk.NewEventManager())
 		tAnteStart := time.Now()
 		newCtx, err := app.anteHandler(anteCtx, tx, mode == execModeSimulate)
+		app.observeCheckTxRunTxSubstep(mode, "ante_handler", tAnteStart)
 		if mode == execModeFinalize {
 			blockTxAnteMs += float64(time.Since(tAnteStart).Nanoseconds()) / 1e6
 		}
@@ -1028,12 +1051,18 @@ func (app *BaseApp) runTxWithMultiStore(
 			return gInfo, nil, nil, err
 		}
 
+		tAnteCacheWrite := time.Now()
 		msCache.Write()
+		app.observeCheckTxRunTxSubstep(mode, "ante_cache_write", tAnteCacheWrite)
+		tAnteEventsToABCI := time.Now()
 		anteEvents = events.ToABCIEvents()
+		app.observeCheckTxRunTxSubstep(mode, "ante_events_to_abci", tAnteEventsToABCI)
 	}
 
 	if mode == execModeCheck {
+		tMempoolInsert := time.Now()
 		err = app.mempool.Insert(ctx, tx)
+		app.observeCheckTxRunTxSubstep(mode, "mempool_insert", tMempoolInsert)
 		if err != nil {
 			return gInfo, nil, anteEvents, err
 		}
@@ -1048,15 +1077,20 @@ func (app *BaseApp) runTxWithMultiStore(
 	// Create a new Context based off of the existing Context with a MultiStore branch
 	// in case message processing fails. At this point, the MultiStore
 	// is a branch of a branch.
+	tRunMsgCacheContext := time.Now()
 	runMsgCtx, msCache := app.cacheTxContext(ctx, txBytes)
+	app.observeCheckTxRunTxSubstep(mode, "runmsg_cache_context", tRunMsgCacheContext)
 
 	// Attempt to execute all messages and only update state if all messages pass
 	// and we're in DeliverTx. Note, runMsgs will never return a reference to a
 	// Result if any single message fails or does not have a registered Handler.
+	tGetMsgsV2 := time.Now()
 	msgsV2, err := tx.GetMsgsV2()
+	app.observeCheckTxRunTxSubstep(mode, "get_msgs_v2", tGetMsgsV2)
 	if err == nil {
 		tMsgsStart := time.Now()
 		result, err = app.runMsgs(runMsgCtx, msgs, msgsV2, mode)
+		app.observeCheckTxRunTxSubstep(mode, "run_msgs", tMsgsStart)
 		if mode == execModeFinalize {
 			blockTxMsgsMs += float64(time.Since(tMsgsStart).Nanoseconds()) / 1e6
 		}
@@ -1073,6 +1107,7 @@ func (app *BaseApp) runTxWithMultiStore(
 
 		tPostStart := time.Now()
 		newCtx, errPostHandler := app.postHandler(postCtx, tx, mode == execModeSimulate, err == nil)
+		app.observeCheckTxRunTxSubstep(mode, "post_handler", tPostStart)
 		if mode == execModeFinalize {
 			blockTxPostMs += float64(time.Since(tPostStart).Nanoseconds()) / 1e6
 		}
