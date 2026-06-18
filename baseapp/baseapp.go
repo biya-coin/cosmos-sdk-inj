@@ -40,14 +40,6 @@ import (
 type (
 	execMode uint8
 
-	// signerInfoMempool is an optional mempool extension used by FinalizeBlock
-	// to pre-extract signer data for block transactions and reuse it during
-	// removal.
-	signerInfoMempool interface {
-		PreExtractSignerInfo([]sdk.Tx) []any
-		RemoveWithSignerInfo(sdk.Tx, any) error
-	}
-
 	// StoreLoader defines a customizable function to control how we load the
 	// CommitMultiStore from disk. This is useful for state migration, when
 	// loading a datastore written with an older version of the software. In
@@ -817,10 +809,10 @@ func (app *BaseApp) beginBlock(_ *abci.FinalizeBlockRequest) (sdk.BeginBlock, er
 }
 
 func (app *BaseApp) deliverTx(tx []byte, memTx sdk.Tx, txIndex int) *abci.ExecTxResult {
-	return app.deliverTxWithMultiStore(tx, memTx, txIndex, nil, nil, nil)
+	return app.deliverTxWithMultiStore(tx, memTx, txIndex, nil, nil)
 }
 
-func (app *BaseApp) deliverTxWithMultiStore(tx []byte, memTx sdk.Tx, txIndex int, txMultiStore storetypes.MultiStore, incarnationCache map[string]any, signerInfo any) *abci.ExecTxResult {
+func (app *BaseApp) deliverTxWithMultiStore(tx []byte, memTx sdk.Tx, txIndex int, txMultiStore storetypes.MultiStore, incarnationCache map[string]any) *abci.ExecTxResult {
 	gInfo := sdk.GasInfo{}
 	resultStr := "successful"
 
@@ -833,7 +825,7 @@ func (app *BaseApp) deliverTxWithMultiStore(tx []byte, memTx sdk.Tx, txIndex int
 		telemetry.SetGauge(float32(gInfo.GasWanted), "tx", "gas", "wanted")
 	}()
 
-	gInfo, result, anteEvents, err := app.runTxWithMultiStore(execModeFinalize, tx, memTx, txIndex, txMultiStore, incarnationCache, signerInfo)
+	gInfo, result, anteEvents, err := app.runTxWithMultiStore(execModeFinalize, tx, memTx, txIndex, txMultiStore, incarnationCache)
 	if err != nil {
 		resultStr = "failed"
 		resp = sdkerrors.ResponseExecTxResultWithEvents(
@@ -900,7 +892,7 @@ func (app *BaseApp) endBlock(_ context.Context) (sdk.EndBlock, error) {
 // both txbytes and the decoded tx are passed to runTx to avoid the state machine encoding the tx and decoding the transaction twice
 // passing the decoded tx to runTX is optional, it will be decoded if the tx is nil
 func (app *BaseApp) runTx(mode execMode, txBytes []byte, tx sdk.Tx) (gInfo sdk.GasInfo, result *sdk.Result, anteEvents []abci.Event, err error) {
-	return app.runTxWithMultiStore(mode, txBytes, tx, -1, nil, nil, nil)
+	return app.runTxWithMultiStore(mode, txBytes, tx, -1, nil, nil)
 }
 
 // blockTxAnteMs, blockTxMsgsMs, blockTxPostMs are block-scoped accumulators
@@ -915,7 +907,6 @@ func (app *BaseApp) runTxWithMultiStore(
 	txIndex int,
 	txMultiStore storetypes.MultiStore,
 	incarnationCache map[string]any,
-	signerInfo any,
 ) (gInfo sdk.GasInfo, result *sdk.Result, anteEvents []abci.Event, err error) {
 	// NOTE: GasWanted should be returned by the AnteHandler. GasUsed is
 	// determined by the GasMeter. We need access to the context to get the gas
@@ -1047,11 +1038,7 @@ func (app *BaseApp) runTxWithMultiStore(
 			return gInfo, nil, anteEvents, err
 		}
 	} else if mode == execModeFinalize {
-		if signerMempool, ok := app.mempool.(signerInfoMempool); ok && signerInfo != nil {
-			err = signerMempool.RemoveWithSignerInfo(tx, signerInfo)
-		} else {
-			err = app.mempool.Remove(tx)
-		}
+		err = app.mempool.Remove(tx)
 		if err != nil && !errors.Is(err, mempool.ErrTxNotFound) {
 			return gInfo, nil, anteEvents,
 				fmt.Errorf("failed to remove tx from mempool: %w", err)
