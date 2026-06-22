@@ -1058,6 +1058,36 @@ func (app *BaseApp) runTx(mode execMode, txBytes []byte, tx sdk.Tx) (gInfo sdk.G
 // Safe because tx execution inside FinalizeBlock is sequential.
 var blockTxAnteMs, blockTxMsgsMs, blockTxPostMs float64
 
+var blockRunMsgsSubsteps runMsgsSubstepTiming
+
+type runMsgsSubstepTiming struct {
+	routeCheckMs      float64
+	msgHandlerMs      float64
+	createEventsMs    float64
+	tagMsgIndexMs     float64
+	appendEventsMs    float64
+	collectResponseMs float64
+	makeABCIDataMs    float64
+	toABCIEventsMs    float64
+	resultBuildMs     float64
+}
+
+func elapsedMsSince(start time.Time) float64 {
+	return float64(time.Since(start).Nanoseconds()) / 1e6
+}
+
+func (t *runMsgsSubstepTiming) add(other runMsgsSubstepTiming) {
+	t.routeCheckMs += other.routeCheckMs
+	t.msgHandlerMs += other.msgHandlerMs
+	t.createEventsMs += other.createEventsMs
+	t.tagMsgIndexMs += other.tagMsgIndexMs
+	t.appendEventsMs += other.appendEventsMs
+	t.collectResponseMs += other.collectResponseMs
+	t.makeABCIDataMs += other.makeABCIDataMs
+	t.toABCIEventsMs += other.toABCIEventsMs
+	t.resultBuildMs += other.resultBuildMs
+}
+
 func (app *BaseApp) observeCheckTxRunTxSubstep(mode execMode, step string, start time.Time) {
 	if mode != execModeCheck {
 		return
@@ -1300,28 +1330,43 @@ func (app *BaseApp) runTxWithMultiStore(
 // executed during simulation and DeliverTx. The caller must not commit state if
 // an error is returned.
 func (app *BaseApp) runMsgs(ctx sdk.Context, txInfo *txRuntimeInfo, mode execMode) (*sdk.Result, error) {
+	substeps := runMsgsSubstepTiming{}
+	defer func() {
+		if mode == execModeFinalize {
+			blockRunMsgsSubsteps.add(substeps)
+		}
+	}()
+
 	events := make(sdk.Events, 0, len(txInfo.msgInfos)*4)
 	msgResponses := make([]*codectypes.Any, 0, len(txInfo.msgInfos))
 
 	// NOTE: GasWanted is determined by the AnteHandler and GasUsed by the GasMeter.
 	for i, msgInfo := range txInfo.msgInfos {
+		tRouteCheck := time.Now()
 		if mode != execModeFinalize && mode != execModeSimulate {
+			substeps.routeCheckMs += elapsedMsSince(tRouteCheck)
 			break
 		}
 
 		handler := msgInfo.handler
 		if handler == nil {
+			substeps.routeCheckMs += elapsedMsSince(tRouteCheck)
 			return nil, errorsmod.Wrapf(sdkerrors.ErrUnknownRequest, "no message handler found for %T", msgInfo.msg)
 		}
+		substeps.routeCheckMs += elapsedMsSince(tRouteCheck)
 
 		// ADR 031 request type routing
+		tMsgHandler := time.Now()
 		msgResult, err := handler(ctx, msgInfo.msg)
+		substeps.msgHandlerMs += elapsedMsSince(tMsgHandler)
 		if err != nil {
 			return nil, errorsmod.Wrapf(err, "failed to execute message; message index: %d", i)
 		}
 
 		// create message events
+		tCreateEvents := time.Now()
 		msgEvents, err := createEvents(app.cdc, msgResult.GetEvents(), msgInfo)
+		substeps.createEventsMs += elapsedMsSince(tCreateEvents)
 		if err != nil {
 			return nil, errorsmod.Wrapf(err, "failed to create message events; message index: %d", i)
 		}
@@ -1330,38 +1375,55 @@ func (app *BaseApp) runMsgs(ctx sdk.Context, txInfo *txRuntimeInfo, mode execMod
 		//
 		// Note: Each message result's data must be length-prefixed in order to
 		// separate each result.
+		tTagMsgIndex := time.Now()
 		for j, event := range msgEvents {
 			// append message index to all events
 			msgEvents[j] = event.AppendAttributes(sdk.NewAttribute("msg_index", strconv.Itoa(i)))
 		}
+		substeps.tagMsgIndexMs += elapsedMsSince(tTagMsgIndex)
 
+		tAppendEvents := time.Now()
 		events = events.AppendEvents(msgEvents)
+		substeps.appendEventsMs += elapsedMsSince(tAppendEvents)
 
 		// Each individual sdk.Result that went through the MsgServiceRouter
 		// (which should represent 99% of the Msgs now, since everyone should
 		// be using protobuf Msgs) has exactly one Msg response, set inside
 		// `WrapServiceResult`. We take that Msg response, and aggregate it
 		// into an array.
+		tCollectResponse := time.Now()
 		if len(msgResult.MsgResponses) > 0 {
 			msgResponse := msgResult.MsgResponses[0]
 			if msgResponse == nil {
+				substeps.collectResponseMs += elapsedMsSince(tCollectResponse)
 				return nil, sdkerrors.ErrLogic.Wrapf("got nil Msg response at index %d for msg %s", i, msgInfo.typeURL)
 			}
 			msgResponses = append(msgResponses, msgResponse)
 		}
+		substeps.collectResponseMs += elapsedMsSince(tCollectResponse)
 
 	}
 
+	tMakeABCIData := time.Now()
 	data, err := makeABCIData(msgResponses)
+	substeps.makeABCIDataMs += elapsedMsSince(tMakeABCIData)
 	if err != nil {
 		return nil, errorsmod.Wrap(err, "failed to marshal tx data")
 	}
 
-	return &sdk.Result{
+	tToABCIEvents := time.Now()
+	abciEvents := events.ToABCIEvents()
+	substeps.toABCIEventsMs += elapsedMsSince(tToABCIEvents)
+
+	tResultBuild := time.Now()
+	result := &sdk.Result{
 		Data:         data,
-		Events:       events.ToABCIEvents(),
+		Events:       abciEvents,
 		MsgResponses: msgResponses,
-	}, nil
+	}
+	substeps.resultBuildMs += elapsedMsSince(tResultBuild)
+
+	return result, nil
 }
 
 // makeABCIData generates the Data field to be sent to ABCI Check/DeliverTx.

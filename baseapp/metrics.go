@@ -47,6 +47,11 @@ type perfMetrics struct {
 	// Labels: step = ante | msgs | post
 	ExecuteTxsStepSeconds cmtmetrics.Histogram
 
+	// runMsgs framework sub-step durations.
+	// Labels: step = route_check | msg_handler | create_events | tag_msg_index |
+	// append_events | collect_response | make_abci_data | to_abci_events | result_build
+	RunMsgsSubstepSeconds cmtmetrics.Histogram
+
 	// ── FinalizeBlock 各子步骤（秒） ──────────────────────────────────────
 	// 对应 Loki msg=app_finalize_block
 	// Labels: step = total | oe_wait | internal_exec | working_hash
@@ -100,6 +105,14 @@ func newPrometheusMetrics(namespace string) *perfMetrics {
 				Name:      "execute_txs_step_seconds",
 				Help:      "Per-block cumulative time for ante / msgs / post handlers across all txs.",
 				Buckets:   []float64{0.1, 0.25, 0.5, 1, 2, 3, 4, 5, 6, 7, 8},
+			}, []string{"step"}),
+
+			RunMsgsSubstepSeconds: prommetrics.NewHistogramFrom(stdprometheus.HistogramOpts{
+				Namespace: namespace,
+				Subsystem: metricsSubsystem,
+				Name:      "run_msgs_substep_seconds",
+				Help:      "Per-block cumulative time for runMsgs framework sub-steps.",
+				Buckets:   []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 3, 5},
 			}, []string{"step"}),
 
 			FinalizeBlockStepSeconds: prommetrics.NewHistogramFrom(stdprometheus.HistogramOpts{
