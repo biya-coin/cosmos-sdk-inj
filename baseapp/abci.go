@@ -978,6 +978,18 @@ func (app *BaseApp) executeTxs(ctx context.Context, txs [][]byte) ([]*abci.ExecT
 		}
 	}
 
+	// Precompute stateless tx runtime data before sequential state execution.
+	var runtimeInfoByTxIndex []*txRuntimeInfo
+	if len(validTxs) > 0 {
+		runtimeInfoByTxIndex = make([]*txRuntimeInfo, len(txs))
+		runtimeInfos := app.prebuildTxRuntimeInfos(validTxs, true)
+		for i, txIdx := range validTxIndices {
+			if i < len(runtimeInfos) {
+				runtimeInfoByTxIndex[txIdx] = runtimeInfos[i]
+			}
+		}
+	}
+
 	for txIdx, rawTx := range txs {
 		var response *abci.ExecTxResult
 
@@ -986,7 +998,11 @@ func (app *BaseApp) executeTxs(ctx context.Context, txs [][]byte) ([]*abci.ExecT
 			if signerInfoByTxIndex != nil {
 				signerInfo = signerInfoByTxIndex[txIdx]
 			}
-			response = app.deliverTx(rawTx, memTx, txIdx, signerInfo)
+			var runtimeInfo *txRuntimeInfo
+			if runtimeInfoByTxIndex != nil {
+				runtimeInfo = runtimeInfoByTxIndex[txIdx]
+			}
+			response = app.deliverTx(rawTx, memTx, txIdx, signerInfo, runtimeInfo)
 		} else {
 			// In the case where a transaction included in a block proposal is malformed,
 			// we still want to return a default response to comet. This is because comet
