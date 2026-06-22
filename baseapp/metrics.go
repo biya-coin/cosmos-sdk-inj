@@ -48,8 +48,7 @@ type perfMetrics struct {
 	ExecuteTxsStepSeconds cmtmetrics.Histogram
 
 	// runMsgs framework sub-step durations.
-	// Labels: step = route_check | msg_handler | create_events | tag_msg_index |
-	// append_events | collect_response | make_abci_data | to_abci_events | result_build
+	// Labels include total/init/loop/post-loop/handler framework steps.
 	RunMsgsSubstepSeconds cmtmetrics.Histogram
 
 	// ── FinalizeBlock 各子步骤（秒） ──────────────────────────────────────

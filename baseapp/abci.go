@@ -1030,8 +1030,11 @@ func (app *BaseApp) executeTxs(ctx context.Context, txs [][]byte) ([]*abci.ExecT
 	height := app.finalizeBlockState.Context().BlockHeight()
 	fmt.Printf("msg=execute_txs_substep height=%d etx1_ante_ms=%.3f etx2_msgs_ms=%.3f etx3_post_ms=%.3f\n",
 		height, blockTxAnteMs, blockTxMsgsMs, blockTxPostMs)
-	fmt.Printf("msg=run_msgs_substep_timing height=%d rms1_route_check_ms=%.3f rms2_msg_handler_ms=%.3f rms3_create_events_ms=%.3f rms4_tag_msg_index_ms=%.3f rms5_append_events_ms=%.3f rms6_collect_response_ms=%.3f rms7_make_abci_data_ms=%.3f rms8_to_abci_events_ms=%.3f rms9_result_build_ms=%.3f\n",
+	fmt.Printf("msg=run_msgs_substep_timing height=%d rms0_total_ms=%.3f rms0_init_ms=%.3f rms0_loop_setup_ms=%.3f rms1_route_check_ms=%.3f rms2_msg_handler_ms=%.3f rms3_create_events_ms=%.3f rms4_tag_msg_index_ms=%.3f rms5_append_events_ms=%.3f rms6_collect_response_ms=%.3f rms7_make_abci_data_ms=%.3f rms8_to_abci_events_ms=%.3f rms9_result_build_ms=%.3f rms10_loop_total_ms=%.3f rms11_loop_framework_ms=%.3f rms12_post_loop_total_ms=%.3f rms13_post_loop_framework_ms=%.3f rms14_accumulate_ms=%.3f\n",
 		height,
+		blockRunMsgsSubsteps.totalMs,
+		blockRunMsgsSubsteps.initMs,
+		blockRunMsgsSubsteps.loopSetupMs,
 		blockRunMsgsSubsteps.routeCheckMs,
 		blockRunMsgsSubsteps.msgHandlerMs,
 		blockRunMsgsSubsteps.createEventsMs,
@@ -1041,10 +1044,18 @@ func (app *BaseApp) executeTxs(ctx context.Context, txs [][]byte) ([]*abci.ExecT
 		blockRunMsgsSubsteps.makeABCIDataMs,
 		blockRunMsgsSubsteps.toABCIEventsMs,
 		blockRunMsgsSubsteps.resultBuildMs,
+		blockRunMsgsSubsteps.loopTotalMs,
+		blockRunMsgsSubsteps.loopFrameworkMs,
+		blockRunMsgsSubsteps.postLoopTotalMs,
+		blockRunMsgsSubsteps.postLoopFrameworkMs,
+		blockRunMsgsSubsteps.accumulateMs,
 	)
 	app.perfMetrics.ExecuteTxsStepSeconds.With("step", "ante").Observe(blockTxAnteMs / 1000)
 	app.perfMetrics.ExecuteTxsStepSeconds.With("step", "msgs").Observe(blockTxMsgsMs / 1000)
 	app.perfMetrics.ExecuteTxsStepSeconds.With("step", "post").Observe(blockTxPostMs / 1000)
+	app.perfMetrics.RunMsgsSubstepSeconds.With("step", "total").Observe(blockRunMsgsSubsteps.totalMs / 1000)
+	app.perfMetrics.RunMsgsSubstepSeconds.With("step", "init").Observe(blockRunMsgsSubsteps.initMs / 1000)
+	app.perfMetrics.RunMsgsSubstepSeconds.With("step", "loop_setup").Observe(blockRunMsgsSubsteps.loopSetupMs / 1000)
 	app.perfMetrics.RunMsgsSubstepSeconds.With("step", "route_check").Observe(blockRunMsgsSubsteps.routeCheckMs / 1000)
 	app.perfMetrics.RunMsgsSubstepSeconds.With("step", "msg_handler").Observe(blockRunMsgsSubsteps.msgHandlerMs / 1000)
 	app.perfMetrics.RunMsgsSubstepSeconds.With("step", "create_events").Observe(blockRunMsgsSubsteps.createEventsMs / 1000)
@@ -1054,6 +1065,11 @@ func (app *BaseApp) executeTxs(ctx context.Context, txs [][]byte) ([]*abci.ExecT
 	app.perfMetrics.RunMsgsSubstepSeconds.With("step", "make_abci_data").Observe(blockRunMsgsSubsteps.makeABCIDataMs / 1000)
 	app.perfMetrics.RunMsgsSubstepSeconds.With("step", "to_abci_events").Observe(blockRunMsgsSubsteps.toABCIEventsMs / 1000)
 	app.perfMetrics.RunMsgsSubstepSeconds.With("step", "result_build").Observe(blockRunMsgsSubsteps.resultBuildMs / 1000)
+	app.perfMetrics.RunMsgsSubstepSeconds.With("step", "loop_total").Observe(blockRunMsgsSubsteps.loopTotalMs / 1000)
+	app.perfMetrics.RunMsgsSubstepSeconds.With("step", "loop_framework").Observe(blockRunMsgsSubsteps.loopFrameworkMs / 1000)
+	app.perfMetrics.RunMsgsSubstepSeconds.With("step", "post_loop_total").Observe(blockRunMsgsSubsteps.postLoopTotalMs / 1000)
+	app.perfMetrics.RunMsgsSubstepSeconds.With("step", "post_loop_framework").Observe(blockRunMsgsSubsteps.postLoopFrameworkMs / 1000)
+	app.perfMetrics.RunMsgsSubstepSeconds.With("step", "accumulate").Observe(blockRunMsgsSubsteps.accumulateMs / 1000)
 	return txResults, nil
 }
 

@@ -1061,15 +1061,23 @@ var blockTxAnteMs, blockTxMsgsMs, blockTxPostMs float64
 var blockRunMsgsSubsteps runMsgsSubstepTiming
 
 type runMsgsSubstepTiming struct {
-	routeCheckMs      float64
-	msgHandlerMs      float64
-	createEventsMs    float64
-	tagMsgIndexMs     float64
-	appendEventsMs    float64
-	collectResponseMs float64
-	makeABCIDataMs    float64
-	toABCIEventsMs    float64
-	resultBuildMs     float64
+	totalMs             float64
+	initMs              float64
+	loopSetupMs         float64
+	routeCheckMs        float64
+	msgHandlerMs        float64
+	createEventsMs      float64
+	tagMsgIndexMs       float64
+	appendEventsMs      float64
+	collectResponseMs   float64
+	loopTotalMs         float64
+	loopFrameworkMs     float64
+	postLoopTotalMs     float64
+	postLoopFrameworkMs float64
+	makeABCIDataMs      float64
+	toABCIEventsMs      float64
+	resultBuildMs       float64
+	accumulateMs        float64
 }
 
 func elapsedMsSince(start time.Time) float64 {
@@ -1077,15 +1085,23 @@ func elapsedMsSince(start time.Time) float64 {
 }
 
 func (t *runMsgsSubstepTiming) add(other runMsgsSubstepTiming) {
+	t.totalMs += other.totalMs
+	t.initMs += other.initMs
+	t.loopSetupMs += other.loopSetupMs
 	t.routeCheckMs += other.routeCheckMs
 	t.msgHandlerMs += other.msgHandlerMs
 	t.createEventsMs += other.createEventsMs
 	t.tagMsgIndexMs += other.tagMsgIndexMs
 	t.appendEventsMs += other.appendEventsMs
 	t.collectResponseMs += other.collectResponseMs
+	t.loopTotalMs += other.loopTotalMs
+	t.loopFrameworkMs += other.loopFrameworkMs
+	t.postLoopTotalMs += other.postLoopTotalMs
+	t.postLoopFrameworkMs += other.postLoopFrameworkMs
 	t.makeABCIDataMs += other.makeABCIDataMs
 	t.toABCIEventsMs += other.toABCIEventsMs
 	t.resultBuildMs += other.resultBuildMs
+	t.accumulateMs += other.accumulateMs
 }
 
 func (app *BaseApp) observeCheckTxRunTxSubstep(mode execMode, step string, start time.Time) {
@@ -1330,21 +1346,33 @@ func (app *BaseApp) runTxWithMultiStore(
 // executed during simulation and DeliverTx. The caller must not commit state if
 // an error is returned.
 func (app *BaseApp) runMsgs(ctx sdk.Context, txInfo *txRuntimeInfo, mode execMode) (*sdk.Result, error) {
+	tRunMsgsTotal := time.Now()
 	substeps := runMsgsSubstepTiming{}
 	defer func() {
+		substeps.totalMs += elapsedMsSince(tRunMsgsTotal)
 		if mode == execModeFinalize {
+			tAccumulate := time.Now()
 			blockRunMsgsSubsteps.add(substeps)
+			accumulateMs := elapsedMsSince(tAccumulate)
+			blockRunMsgsSubsteps.accumulateMs += accumulateMs
+			blockRunMsgsSubsteps.totalMs += accumulateMs
 		}
 	}()
 
+	tInit := time.Now()
 	events := make(sdk.Events, 0, len(txInfo.msgInfos)*4)
 	msgResponses := make([]*codectypes.Any, 0, len(txInfo.msgInfos))
+	substeps.initMs += elapsedMsSince(tInit)
 
 	// NOTE: GasWanted is determined by the AnteHandler and GasUsed by the GasMeter.
+	tLoopSetup := time.Now()
+	tLoopTotal := time.Now()
+	substeps.loopSetupMs += elapsedMsSince(tLoopSetup)
 	for i, msgInfo := range txInfo.msgInfos {
 		tRouteCheck := time.Now()
 		if mode != execModeFinalize && mode != execModeSimulate {
 			substeps.routeCheckMs += elapsedMsSince(tRouteCheck)
+			substeps.loopTotalMs += elapsedMsSince(tLoopTotal)
 			break
 		}
 
@@ -1401,9 +1429,16 @@ func (app *BaseApp) runMsgs(ctx sdk.Context, txInfo *txRuntimeInfo, mode execMod
 			msgResponses = append(msgResponses, msgResponse)
 		}
 		substeps.collectResponseMs += elapsedMsSince(tCollectResponse)
-
+	}
+	substeps.loopTotalMs += elapsedMsSince(tLoopTotal)
+	knownLoopMs := substeps.loopSetupMs + substeps.routeCheckMs + substeps.msgHandlerMs +
+		substeps.createEventsMs + substeps.tagMsgIndexMs + substeps.appendEventsMs +
+		substeps.collectResponseMs
+	if substeps.loopTotalMs > knownLoopMs {
+		substeps.loopFrameworkMs += substeps.loopTotalMs - knownLoopMs
 	}
 
+	tPostLoopTotal := time.Now()
 	tMakeABCIData := time.Now()
 	data, err := makeABCIData(msgResponses)
 	substeps.makeABCIDataMs += elapsedMsSince(tMakeABCIData)
@@ -1422,6 +1457,12 @@ func (app *BaseApp) runMsgs(ctx sdk.Context, txInfo *txRuntimeInfo, mode execMod
 		MsgResponses: msgResponses,
 	}
 	substeps.resultBuildMs += elapsedMsSince(tResultBuild)
+
+	substeps.postLoopTotalMs += elapsedMsSince(tPostLoopTotal)
+	knownPostLoopMs := substeps.makeABCIDataMs + substeps.toABCIEventsMs + substeps.resultBuildMs
+	if substeps.postLoopTotalMs > knownPostLoopMs {
+		substeps.postLoopFrameworkMs += substeps.postLoopTotalMs - knownPostLoopMs
+	}
 
 	return result, nil
 }
@@ -1454,7 +1495,9 @@ func createEvents(cdc codec.Codec, events sdk.Events, msgInfo msgRuntimeInfo) (s
 		}
 	}
 
-	return sdk.Events{msgEvent}.AppendEvents(events), nil
+	msgEvents := sdk.Events{msgEvent}.AppendEvents(events)
+
+	return msgEvents, nil
 }
 
 // PrepareProposalVerifyTx performs transaction verification when a proposer is
