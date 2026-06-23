@@ -1,7 +1,8 @@
 package baseapp
 
 // Metrics contains Prometheus metrics for BaseApp performance instrumentation.
-// These histograms are the source of truth for ExecuteTxs performance data.
+// These histograms mirror every field already logged via Loki (fmt.Printf),
+// so both observability pipelines stay in sync.
 //
 // Follow the same pattern as CometBFT internal/consensus/metrics.go:
 //   - Metrics is a plain struct with metrics.Histogram interface fields.
@@ -44,9 +45,6 @@ type perfMetrics struct {
 	// ── executeTxs 各子步骤（秒） ─────────────────────────────────────────
 	// Labels: step = ante | msgs | post
 	ExecuteTxsStepSeconds cmtmetrics.Histogram
-
-	// ExecuteTxs framework sub-step durations.
-	ExecuteTxsFrameworkSeconds cmtmetrics.Histogram
 
 	// ── FinalizeBlock 各子步骤（秒） ──────────────────────────────────────
 	// 对应 Loki msg=app_finalize_block
@@ -101,14 +99,6 @@ func newPrometheusMetrics(namespace string) *perfMetrics {
 				Name:      "execute_txs_step_seconds",
 				Help:      "Per-block cumulative time for ante / msgs / post handlers across all txs.",
 				Buckets:   []float64{0.1, 0.25, 0.5, 1, 2, 3, 4, 5, 6, 7, 8},
-			}, []string{"step"}),
-
-			ExecuteTxsFrameworkSeconds: prommetrics.NewHistogramFrom(stdprometheus.HistogramOpts{
-				Namespace: namespace,
-				Subsystem: metricsSubsystem,
-				Name:      "execute_txs_framework_seconds",
-				Help:      "Per-block cumulative time for ExecuteTxs framework sub-steps.",
-				Buckets:   []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 3, 5},
 			}, []string{"step"}),
 
 			FinalizeBlockStepSeconds: prommetrics.NewHistogramFrom(stdprometheus.HistogramOpts{

@@ -2,7 +2,6 @@ package tx
 
 import (
 	"fmt"
-	"time"
 
 	"google.golang.org/protobuf/encoding/protowire"
 
@@ -13,25 +12,13 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
 	"github.com/cosmos/cosmos-sdk/types/tx"
-	txtiming "github.com/cosmos/cosmos-sdk/x/auth/tx/timing"
 )
 
 // DefaultTxDecoder returns a default protobuf TxDecoder using the provided Marshaler.
 func DefaultTxDecoder(cdc codec.Codec) sdk.TxDecoder {
 	return func(txBytes []byte) (decoded sdk.Tx, err error) {
-		txtiming.AddCall()
-		totalStart := time.Now()
-		defer func() {
-			txtiming.AddTotal(time.Since(totalStart).Nanoseconds())
-			if err != nil {
-				txtiming.AddError()
-			}
-		}()
-
 		// Make sure txBytes follow ADR-027.
-		stepStart := time.Now()
 		err = rejectNonADR027TxRaw(txBytes)
-		txtiming.AddADR027(time.Since(stepStart).Nanoseconds())
 		if err != nil {
 			return nil, errorsmod.Wrap(sdkerrors.ErrTxDecode, err.Error())
 		}
@@ -39,16 +26,12 @@ func DefaultTxDecoder(cdc codec.Codec) sdk.TxDecoder {
 		var raw tx.TxRaw
 
 		// reject all unknown proto fields in the root TxRaw
-		stepStart = time.Now()
 		err = unknownproto.RejectUnknownFieldsStrict(txBytes, &raw, cdc.InterfaceRegistry())
-		txtiming.AddTxRawUnknown(time.Since(stepStart).Nanoseconds())
 		if err != nil {
 			return nil, errorsmod.Wrap(sdkerrors.ErrTxDecode, err.Error())
 		}
 
-		stepStart = time.Now()
 		err = cdc.Unmarshal(txBytes, &raw)
-		txtiming.AddTxRawUnmarshal(time.Since(stepStart).Nanoseconds())
 		if err != nil {
 			return nil, err
 		}
@@ -56,16 +39,12 @@ func DefaultTxDecoder(cdc codec.Codec) sdk.TxDecoder {
 		var body tx.TxBody
 
 		// allow non-critical unknown fields in TxBody
-		stepStart = time.Now()
 		txBodyHasUnknownNonCriticals, err := unknownproto.RejectUnknownFields(raw.BodyBytes, &body, true, cdc.InterfaceRegistry())
-		txtiming.AddTxBodyUnknown(time.Since(stepStart).Nanoseconds())
 		if err != nil {
 			return nil, errorsmod.Wrap(sdkerrors.ErrTxDecode, err.Error())
 		}
 
-		stepStart = time.Now()
 		err = cdc.Unmarshal(raw.BodyBytes, &body)
-		txtiming.AddTxBodyUnmarshal(time.Since(stepStart).Nanoseconds())
 		if err != nil {
 			return nil, errorsmod.Wrap(sdkerrors.ErrTxDecode, err.Error())
 		}
@@ -73,21 +52,16 @@ func DefaultTxDecoder(cdc codec.Codec) sdk.TxDecoder {
 		var authInfo tx.AuthInfo
 
 		// reject all unknown proto fields in AuthInfo
-		stepStart = time.Now()
 		err = unknownproto.RejectUnknownFieldsStrict(raw.AuthInfoBytes, &authInfo, cdc.InterfaceRegistry())
-		txtiming.AddAuthInfoUnknown(time.Since(stepStart).Nanoseconds())
 		if err != nil {
 			return nil, errorsmod.Wrap(sdkerrors.ErrTxDecode, err.Error())
 		}
 
-		stepStart = time.Now()
 		err = cdc.Unmarshal(raw.AuthInfoBytes, &authInfo)
-		txtiming.AddAuthInfoUnmarshal(time.Since(stepStart).Nanoseconds())
 		if err != nil {
 			return nil, errorsmod.Wrap(sdkerrors.ErrTxDecode, err.Error())
 		}
 
-		stepStart = time.Now()
 		theTx := &tx.Tx{
 			Body:       &body,
 			AuthInfo:   &authInfo,
@@ -101,7 +75,6 @@ func DefaultTxDecoder(cdc codec.Codec) sdk.TxDecoder {
 			txBodyHasUnknownNonCriticals: txBodyHasUnknownNonCriticals,
 			cdc:                          cdc,
 		}
-		txtiming.AddWrapperBuild(time.Since(stepStart).Nanoseconds())
 		return decoded, nil
 	}
 }

@@ -82,7 +82,6 @@ type txRuntimeInfo struct {
 	msgs             []sdk.Msg
 	msgsV2           []protov2.Message
 	msgInfos         []msgRuntimeInfo
-	timing           txRuntimeInfoTiming
 	buildErr         error
 	validateBasicErr error
 	routeErr         error
@@ -722,19 +721,8 @@ func validateBasicTxMsgs(msgs []sdk.Msg) error {
 }
 
 func (app *BaseApp) buildTxRuntimeInfo(tx sdk.Tx, validateBasic bool, precomputeEventMeta bool) (info *txRuntimeInfo) {
-	totalStart := time.Now()
 	info = &txRuntimeInfo{tx: tx}
 	defer func() {
-		info.timing.totalMs = elapsedMsSince(totalStart)
-		knownMs := info.timing.getMsgsMs +
-			info.timing.validateBasicMs +
-			info.timing.routeLookupMs +
-			info.timing.getMsgsV2Ms +
-			info.timing.msgSignerExtractMs +
-			info.timing.msgSenderStringMs
-		if info.timing.totalMs < knownMs {
-			info.timing.totalMs = knownMs
-		}
 		if r := recover(); r != nil {
 			// Preserve the old per-tx error path when prebuilding outside runTx recovery.
 			info.buildErr = fmt.Errorf("panic while building tx runtime info: %v", r)
@@ -746,19 +734,14 @@ func (app *BaseApp) buildTxRuntimeInfo(tx sdk.Tx, validateBasic bool, precompute
 		return info
 	}
 
-	stepStart := time.Now()
 	info.msgs = tx.GetMsgs()
-	info.timing.getMsgsMs += elapsedMsSince(stepStart)
 	if validateBasic {
-		stepStart = time.Now()
 		info.validateBasicErr = validateBasicTxMsgs(info.msgs)
-		info.timing.validateBasicMs += elapsedMsSince(stepStart)
 		if info.validateBasicErr != nil {
 			return info
 		}
 	}
 
-	stepStart = time.Now()
 	info.msgInfos = make([]msgRuntimeInfo, 0, len(info.msgs))
 	for _, msg := range info.msgs {
 		msgInfo := msgRuntimeInfo{
@@ -773,11 +756,8 @@ func (app *BaseApp) buildTxRuntimeInfo(tx sdk.Tx, validateBasic bool, precompute
 		msgInfo.moduleName = sdk.GetModuleNameFromTypeURL(msgInfo.typeURL)
 		info.msgInfos = append(info.msgInfos, msgInfo)
 	}
-	info.timing.routeLookupMs += elapsedMsSince(stepStart)
 
-	stepStart = time.Now()
 	info.msgsV2, info.msgsV2Err = tx.GetMsgsV2()
-	info.timing.getMsgsV2Ms += elapsedMsSince(stepStart)
 	if info.msgsV2Err != nil {
 		return info
 	}
@@ -795,9 +775,7 @@ func (app *BaseApp) buildTxRuntimeInfo(tx sdk.Tx, validateBasic bool, precompute
 	var msgSignersErr error
 	if precomputeEventMeta {
 		if signerTx, ok := tx.(msgV2SignersTx); ok {
-			stepStart = time.Now()
 			msgSigners, msgSignersErr = signerTx.GetMsgsV2Signers()
-			info.timing.msgSignerExtractMs += elapsedMsSince(stepStart)
 		}
 	}
 
@@ -815,17 +793,13 @@ func (app *BaseApp) buildTxRuntimeInfo(tx sdk.Tx, validateBasic bool, precompute
 		if i < len(msgSigners) {
 			info.msgInfos[i].signers = msgSigners[i]
 		} else {
-			stepStart = time.Now()
 			info.msgInfos[i].signers, info.msgInfos[i].signerErr = app.cdc.GetMsgV2Signers(info.msgsV2[i])
-			info.timing.msgSignerExtractMs += elapsedMsSince(stepStart)
 		}
 		if info.msgInfos[i].signerErr != nil {
 			continue
 		}
 		if len(info.msgInfos[i].signers) > 0 && info.msgInfos[i].signers[0] != nil {
-			stepStart = time.Now()
 			info.msgInfos[i].sender, info.msgInfos[i].senderErr = app.cdc.InterfaceRegistry().SigningContext().AddressCodec().BytesToString(info.msgInfos[i].signers[0])
-			info.timing.msgSenderStringMs += elapsedMsSince(stepStart)
 		}
 	}
 
@@ -1047,21 +1021,16 @@ func (app *BaseApp) deliverTxWithMultiStore(tx []byte, memTx sdk.Tx, txIndex int
 	var resp *abci.ExecTxResult
 
 	defer func() {
-		tTelemetry := time.Now()
 		telemetry.IncrCounter(1, "tx", "count")
 		telemetry.IncrCounter(1, "tx", resultStr)
 		telemetry.SetGauge(float32(gInfo.GasUsed), "tx", "gas", "used")
 		telemetry.SetGauge(float32(gInfo.GasWanted), "tx", "gas", "wanted")
-		blockTxTimings.telemetryMs += elapsedMsSince(tTelemetry)
 	}()
 
 	gInfo, result, anteEvents, err := app.runTxWithMultiStore(execModeFinalize, tx, memTx, txIndex, txMultiStore, incarnationCache, signerInfo, runtimeInfo)
 	if err != nil {
 		resultStr = "failed"
-		tMarkEvents := time.Now()
 		markedEvents := sdk.MarkEventsToIndex(anteEvents, app.indexEvents)
-		blockTxTimings.errorMarkEventsMs += elapsedMsSince(tMarkEvents)
-		tErrorResponse := time.Now()
 		resp = sdkerrors.ResponseExecTxResultWithEvents(
 			err,
 			gInfo.GasWanted,
@@ -1069,19 +1038,13 @@ func (app *BaseApp) deliverTxWithMultiStore(tx []byte, memTx sdk.Tx, txIndex int
 			markedEvents,
 			app.trace,
 		)
-		blockTxTimings.errorResponseBuildMs += elapsedMsSince(tErrorResponse)
 		return resp
 	}
 
 	ctx := app.finalizeBlockState.Context()
-	tStreamEvents := time.Now()
 	app.AddStreamEvents(ctx.BlockHeight(), ctx.BlockTime(), result.Events, false)
-	blockTxTimings.streamEventsMs += elapsedMsSince(tStreamEvents)
 
-	tMarkEvents := time.Now()
 	markedEvents := sdk.MarkEventsToIndex(result.Events, app.indexEvents)
-	blockTxTimings.responseMarkEventsMs += elapsedMsSince(tMarkEvents)
-	tResponseBuild := time.Now()
 	resp = &abci.ExecTxResult{
 		GasWanted: int64(gInfo.GasWanted),
 		GasUsed:   int64(gInfo.GasUsed),
@@ -1089,7 +1052,6 @@ func (app *BaseApp) deliverTxWithMultiStore(tx []byte, memTx sdk.Tx, txIndex int
 		Data:      result.Data,
 		Events:    markedEvents,
 	}
-	blockTxTimings.responseBuildMs += elapsedMsSince(tResponseBuild)
 
 	return resp
 }
@@ -1137,75 +1099,6 @@ func (app *BaseApp) runTx(mode execMode, txBytes []byte, tx sdk.Tx) (gInfo sdk.G
 	return app.runTxWithMultiStore(mode, txBytes, tx, -1, nil, nil, nil, nil)
 }
 
-// blockTxTimings are written by FinalizeBlock tx execution and read by executeTxs
-// after the sequential loop.
-var blockTxTimings executeTxsTiming
-
-type executeTxsTiming struct {
-	anteMs                  float64
-	msgsMs                  float64
-	postMs                  float64
-	ctxInitMs               float64
-	txDecodeMs              float64
-	runtimeTotalMs          float64
-	getMsgsMs               float64
-	validateBasicMs         float64
-	routeLookupMs           float64
-	getMsgsV2Ms             float64
-	anteCacheContextMs      float64
-	anteCacheWriteMs        float64
-	anteEventsToABCIMs      float64
-	mempoolRemoveMs         float64
-	runMsgCacheContextMs    float64
-	runMsgCacheWriteMs      float64
-	blockGasConsumeMs       float64
-	eventMergeMs            float64
-	streamEventsMs          float64
-	responseBuildMs         float64
-	errorResponseBuildMs    float64
-	responseMarkEventsMs    float64
-	errorMarkEventsMs       float64
-	telemetryMs             float64
-	invalidTxResponseMs     float64
-	cancelCheckMs           float64
-	appendTxResultMs        float64
-	signerPreExtractMs      float64
-	runtimePrebuildWallMs   float64
-	runtimePrebuildKnownMs  float64
-	runtimePrebuildOverhead float64
-	createEventsMs          float64
-	msgSignerExtractMs      float64
-	msgSenderStringMs       float64
-	msgEventsToABCIMs       float64
-	txMsgDataMarshalMs      float64
-}
-
-type txRuntimeInfoTiming struct {
-	totalMs            float64
-	getMsgsMs          float64
-	validateBasicMs    float64
-	routeLookupMs      float64
-	getMsgsV2Ms        float64
-	msgSignerExtractMs float64
-	msgSenderStringMs  float64
-}
-
-func elapsedMsSince(start time.Time) float64 {
-	return float64(time.Since(start).Nanoseconds()) / 1e6
-}
-
-func (app *BaseApp) observeCheckTxRunTxSubstep(mode execMode, step string, start time.Time) {
-	if mode != execModeCheck {
-		return
-	}
-
-	app.perfMetrics.CheckTxRunTxSubstepSeconds.With("step", step).Observe(time.Since(start).Seconds())
-}
-
-func (app *BaseApp) observeExecuteTxsFramework(step string, ms float64) {
-	app.perfMetrics.ExecuteTxsFrameworkSeconds.With("step", step).Observe(ms / 1000)
-}
-
 func (app *BaseApp) runTxWithMultiStore(
 	mode execMode,
 	txBytes []byte,
@@ -1221,16 +1114,11 @@ func (app *BaseApp) runTxWithMultiStore(
 	// meter, so we initialize upfront.
 	var gasWanted uint64
 
-	tCtxInit := time.Now()
 	ctx := app.getContextForTx(mode, txBytes, txIndex)
 	if txMultiStore != nil {
 		ctx = ctx.WithMultiStore(txMultiStore)
 	}
 	ms := ctx.MultiStore()
-	app.observeCheckTxRunTxSubstep(mode, "ctx_init", tCtxInit)
-	if mode == execModeFinalize {
-		blockTxTimings.ctxInitMs += elapsedMsSince(tCtxInit)
-	}
 
 	// only run the tx if there is block gas remaining
 	if mode == execModeFinalize && ctx.BlockGasMeter().IsOutOfGas() {
@@ -1255,13 +1143,9 @@ func (app *BaseApp) runTxWithMultiStore(
 	consumeBlockGas := func() {
 		if !blockGasConsumed {
 			blockGasConsumed = true
-			t0 := time.Now()
 			ctx.BlockGasMeter().ConsumeGas(
 				ctx.GasMeter().GasConsumedToLimit(), "block gas meter",
 			)
-			if mode == execModeFinalize {
-				blockTxTimings.blockGasConsumeMs += elapsedMsSince(t0)
-			}
 		}
 	}
 
@@ -1277,31 +1161,13 @@ func (app *BaseApp) runTxWithMultiStore(
 
 	// if the transaction is not decoded, decode it here
 	if tx == nil {
-		tTxDecode := time.Now()
 		tx, err = app.txDecoder(txBytes)
-		app.observeCheckTxRunTxSubstep(mode, "tx_decode", tTxDecode)
-		if mode == execModeFinalize {
-			blockTxTimings.txDecodeMs += elapsedMsSince(tTxDecode)
-		}
 		if err != nil {
 			return sdk.GasInfo{}, nil, nil, err
 		}
 	}
-	tRuntimeInfo := time.Now()
-	runtimeInfoBuiltHere := runtimeInfo == nil || runtimeInfo.tx != tx
 	if runtimeInfo == nil || runtimeInfo.tx != tx {
 		runtimeInfo = app.buildTxRuntimeInfo(tx, mode != execModeReCheck, false)
-	}
-	if mode == execModeFinalize && runtimeInfo != nil && runtimeInfoBuiltHere {
-		if runtimeInfo.timing.totalMs > 0 {
-			blockTxTimings.runtimeTotalMs += runtimeInfo.timing.totalMs
-			blockTxTimings.getMsgsMs += runtimeInfo.timing.getMsgsMs
-			blockTxTimings.validateBasicMs += runtimeInfo.timing.validateBasicMs
-			blockTxTimings.routeLookupMs += runtimeInfo.timing.routeLookupMs
-			blockTxTimings.getMsgsV2Ms += runtimeInfo.timing.getMsgsV2Ms
-		} else {
-			blockTxTimings.runtimeTotalMs += elapsedMsSince(tRuntimeInfo)
-		}
 	}
 
 	if runtimeInfo.buildErr != nil {
@@ -1327,19 +1193,9 @@ func (app *BaseApp) runTxWithMultiStore(
 		// NOTE: Alternatively, we could require that AnteHandler ensures that
 		// writes do not happen if aborted/failed.  This may have some
 		// performance benefits, but it'll be more difficult to get right.
-		tAnteCacheContext := time.Now()
 		anteCtx, msCache = app.cacheTxContext(ctx, txBytes)
-		app.observeCheckTxRunTxSubstep(mode, "ante_cache_context", tAnteCacheContext)
-		if mode == execModeFinalize {
-			blockTxTimings.anteCacheContextMs += elapsedMsSince(tAnteCacheContext)
-		}
 		anteCtx = anteCtx.WithEventManager(sdk.NewEventManager())
-		tAnteStart := time.Now()
 		newCtx, err := app.anteHandler(anteCtx, tx, mode == execModeSimulate)
-		app.observeCheckTxRunTxSubstep(mode, "ante_handler", tAnteStart)
-		if mode == execModeFinalize {
-			blockTxTimings.anteMs += elapsedMsSince(tAnteStart)
-		}
 
 		if !newCtx.IsZero() {
 			// At this point, newCtx.MultiStore() is a store branch, or something else
@@ -1366,29 +1222,16 @@ func (app *BaseApp) runTxWithMultiStore(
 			return gInfo, nil, nil, err
 		}
 
-		tAnteCacheWrite := time.Now()
 		msCache.Write()
-		app.observeCheckTxRunTxSubstep(mode, "ante_cache_write", tAnteCacheWrite)
-		if mode == execModeFinalize {
-			blockTxTimings.anteCacheWriteMs += elapsedMsSince(tAnteCacheWrite)
-		}
-		tAnteEventsToABCI := time.Now()
 		anteEvents = events.ToABCIEvents()
-		app.observeCheckTxRunTxSubstep(mode, "ante_events_to_abci", tAnteEventsToABCI)
-		if mode == execModeFinalize {
-			blockTxTimings.anteEventsToABCIMs += elapsedMsSince(tAnteEventsToABCI)
-		}
 	}
 
 	if mode == execModeCheck {
-		tMempoolInsert := time.Now()
 		err = app.mempool.Insert(ctx, tx)
-		app.observeCheckTxRunTxSubstep(mode, "mempool_insert", tMempoolInsert)
 		if err != nil {
 			return gInfo, nil, anteEvents, err
 		}
 	} else if mode == execModeFinalize {
-		tMempoolRemove := time.Now()
 		if signerInfo != nil {
 			if remover, ok := app.mempool.(preExtractSignerInfoMempool); ok {
 				err = remover.RemoveWithSignerInfo(tx, signerInfo)
@@ -1402,18 +1245,12 @@ func (app *BaseApp) runTxWithMultiStore(
 			return gInfo, nil, anteEvents,
 				fmt.Errorf("failed to remove tx from mempool: %w", err)
 		}
-		blockTxTimings.mempoolRemoveMs += elapsedMsSince(tMempoolRemove)
 	}
 
 	// Create a new Context based off of the existing Context with a MultiStore branch
 	// in case message processing fails. At this point, the MultiStore
 	// is a branch of a branch.
-	tRunMsgCacheContext := time.Now()
 	runMsgCtx, msCache := app.cacheTxContext(ctx, txBytes)
-	app.observeCheckTxRunTxSubstep(mode, "runmsg_cache_context", tRunMsgCacheContext)
-	if mode == execModeFinalize {
-		blockTxTimings.runMsgCacheContextMs += elapsedMsSince(tRunMsgCacheContext)
-	}
 
 	// Attempt to execute all messages and only update state if all messages pass
 	// and we're in DeliverTx. Note, runMsgs will never return a reference to a
@@ -1421,12 +1258,7 @@ func (app *BaseApp) runTxWithMultiStore(
 	if runtimeInfo.msgsV2Err != nil {
 		err = runtimeInfo.msgsV2Err
 	} else {
-		tMsgsStart := time.Now()
 		result, err = app.runMsgs(runMsgCtx, runtimeInfo, mode)
-		app.observeCheckTxRunTxSubstep(mode, "run_msgs", tMsgsStart)
-		if mode == execModeFinalize {
-			blockTxTimings.msgsMs += elapsedMsSince(tMsgsStart)
-		}
 	}
 
 	// Run optional postHandlers (should run regardless of the execution result).
@@ -1438,12 +1270,7 @@ func (app *BaseApp) runTxWithMultiStore(
 		// Note that the state is still preserved.
 		postCtx := runMsgCtx.WithEventManager(sdk.NewEventManager())
 
-		tPostStart := time.Now()
 		newCtx, errPostHandler := app.postHandler(postCtx, tx, mode == execModeSimulate, err == nil)
-		app.observeCheckTxRunTxSubstep(mode, "post_handler", tPostStart)
-		if mode == execModeFinalize {
-			blockTxTimings.postMs += elapsedMsSince(tPostStart)
-		}
 		if errPostHandler != nil {
 			return gInfo, nil, anteEvents, errors.Join(err, errPostHandler)
 		}
@@ -1460,18 +1287,12 @@ func (app *BaseApp) runTxWithMultiStore(
 			// When block gas exceeds, it'll panic and won't commit the cached store.
 			consumeBlockGas()
 
-			tRunMsgCacheWrite := time.Now()
 			msCache.Write()
-			blockTxTimings.runMsgCacheWriteMs += elapsedMsSince(tRunMsgCacheWrite)
 		}
 
 		if len(anteEvents) > 0 && (mode == execModeFinalize || mode == execModeSimulate) {
 			// append the events in the order of occurrence
-			tEventMerge := time.Now()
 			result.Events = append(anteEvents, result.Events...)
-			if mode == execModeFinalize {
-				blockTxTimings.eventMergeMs += elapsedMsSince(tEventMerge)
-			}
 		}
 	}
 
@@ -1503,12 +1324,7 @@ func (app *BaseApp) runMsgs(ctx sdk.Context, txInfo *txRuntimeInfo, mode execMod
 			return nil, errorsmod.Wrapf(err, "failed to execute message; message index: %d", i)
 		}
 
-		// create message events
-		tCreateEvents := time.Now()
-		msgEvents, err := createEvents(app.cdc, msgResult.GetEvents(), msgInfo, mode == execModeFinalize)
-		if mode == execModeFinalize {
-			blockTxTimings.createEventsMs += elapsedMsSince(tCreateEvents)
-		}
+		msgEvents, err := createEvents(app.cdc, msgResult.GetEvents(), msgInfo)
 		if err != nil {
 			return nil, errorsmod.Wrapf(err, "failed to create message events; message index: %d", i)
 		}
@@ -1538,20 +1354,12 @@ func (app *BaseApp) runMsgs(ctx sdk.Context, txInfo *txRuntimeInfo, mode execMod
 		}
 	}
 
-	tMakeABCIData := time.Now()
 	data, err := makeABCIData(msgResponses)
-	if mode == execModeFinalize {
-		blockTxTimings.txMsgDataMarshalMs += elapsedMsSince(tMakeABCIData)
-	}
 	if err != nil {
 		return nil, errorsmod.Wrap(err, "failed to marshal tx data")
 	}
 
-	tMsgEventsToABCI := time.Now()
 	abciEvents := events.ToABCIEvents()
-	if mode == execModeFinalize {
-		blockTxTimings.msgEventsToABCIMs += elapsedMsSince(tMsgEventsToABCI)
-	}
 
 	result := &sdk.Result{
 		Data:         data,
@@ -1567,7 +1375,7 @@ func makeABCIData(msgResponses []*codectypes.Any) ([]byte, error) {
 	return proto.Marshal(&sdk.TxMsgData{MsgResponses: msgResponses})
 }
 
-func createEvents(cdc codec.Codec, events sdk.Events, msgInfo msgRuntimeInfo, recordTiming bool) (sdk.Events, error) {
+func createEvents(cdc codec.Codec, events sdk.Events, msgInfo msgRuntimeInfo) (sdk.Events, error) {
 	msgEvent := sdk.NewEvent(sdk.EventTypeMessage, sdk.NewAttribute(sdk.AttributeKeyAction, msgInfo.typeURL))
 
 	// we set the signer attribute as the sender
@@ -1582,20 +1390,12 @@ func createEvents(cdc codec.Codec, events sdk.Events, msgInfo msgRuntimeInfo, re
 			msgEvent = msgEvent.AppendAttributes(sdk.NewAttribute(sdk.AttributeKeySender, msgInfo.sender))
 		}
 	} else {
-		tSignerExtract := time.Now()
 		signers, err := cdc.GetMsgV2Signers(msgInfo.msgV2)
-		if recordTiming {
-			blockTxTimings.msgSignerExtractMs += elapsedMsSince(tSignerExtract)
-		}
 		if err != nil {
 			return nil, err
 		}
 		if len(signers) > 0 && signers[0] != nil {
-			tSenderString := time.Now()
 			addrStr, err := cdc.InterfaceRegistry().SigningContext().AddressCodec().BytesToString(signers[0])
-			if recordTiming {
-				blockTxTimings.msgSenderStringMs += elapsedMsSince(tSenderString)
-			}
 			if err != nil {
 				return nil, err
 			}
