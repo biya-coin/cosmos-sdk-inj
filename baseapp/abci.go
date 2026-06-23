@@ -3,9 +3,11 @@ package baseapp
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/InjectiveLabs/metrics"
@@ -954,16 +956,48 @@ func (app *BaseApp) executeTxs(ctx context.Context, txs [][]byte) ([]*abci.ExecT
 	txtiming.Reset()
 
 	decodedTxs := make([]sdk.Tx, len(txs))
-	var validTxs []sdk.Tx
-	var validTxIndices []int
 	tTxDecodeLoop := time.Now()
-	for txIdx, rawTx := range txs {
-		memTx, err := app.txDecoder(rawTx)
-		if err != nil {
+	if len(txs) > 0 {
+		workerCount := runtime.GOMAXPROCS(0)
+		if workerCount < 1 {
+			workerCount = 1
+		}
+		if workerCount > len(txs) {
+			workerCount = len(txs)
+		}
+
+		jobs := make(chan int)
+		var wg sync.WaitGroup
+		wg.Add(workerCount)
+		for workerIdx := 0; workerIdx < workerCount; workerIdx++ {
+			go func() {
+				defer wg.Done()
+				for txIdx := range jobs {
+					memTx, err := app.txDecoder(txs[txIdx])
+					if err != nil {
+						continue
+					}
+
+					// Keep decoded txs indexed so state execution stays deterministic.
+					decodedTxs[txIdx] = memTx
+				}
+			}()
+		}
+
+		for txIdx := range txs {
+			jobs <- txIdx
+		}
+		close(jobs)
+		wg.Wait()
+	}
+
+	validTxs := make([]sdk.Tx, 0, len(txs))
+	validTxIndices := make([]int, 0, len(txs))
+	for txIdx, memTx := range decodedTxs {
+		if memTx == nil {
 			continue
 		}
 
-		decodedTxs[txIdx] = memTx
 		validTxs = append(validTxs, memTx)
 		validTxIndices = append(validTxIndices, txIdx)
 	}
