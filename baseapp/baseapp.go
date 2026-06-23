@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strconv"
 	"sync"
-	"time"
 
 	"github.com/InjectiveLabs/metrics"
 	"github.com/cockroachdb/errors"
