@@ -27,6 +27,7 @@ import (
 	"github.com/cosmos/cosmos-sdk/telemetry"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
+	txtiming "github.com/cosmos/cosmos-sdk/x/auth/tx/timing"
 )
 
 // Supported ABCI Query prefixes and paths
@@ -949,14 +950,13 @@ func (app *BaseApp) internalFinalizeBlock(ctx context.Context, req *abci.Finaliz
 func (app *BaseApp) executeTxs(ctx context.Context, txs [][]byte) ([]*abci.ExecTxResult, error) {
 	txResults := make([]*abci.ExecTxResult, 0, len(txs))
 	// Reset block-scoped sub-step accumulators before processing any tx.
-	blockTxAnteMs = 0
-	blockTxMsgsMs = 0
-	blockTxPostMs = 0
-	blockRunMsgsSubsteps = runMsgsSubstepTiming{}
+	blockTxTimings = executeTxsTiming{}
+	txtiming.Reset()
 
 	decodedTxs := make([]sdk.Tx, len(txs))
 	var validTxs []sdk.Tx
 	var validTxIndices []int
+	tTxDecodeLoop := time.Now()
 	for txIdx, rawTx := range txs {
 		memTx, err := app.txDecoder(rawTx)
 		if err != nil {
@@ -967,9 +967,12 @@ func (app *BaseApp) executeTxs(ctx context.Context, txs [][]byte) ([]*abci.ExecT
 		validTxs = append(validTxs, memTx)
 		validTxIndices = append(validTxIndices, txIdx)
 	}
+	blockTxTimings.txDecodeMs += elapsedMsSince(tTxDecodeLoop)
+	decoderTiming := txtiming.SnapshotAndReset()
 
 	var signerInfoByTxIndex []any
 	if extractor, ok := app.mempool.(preExtractSignerInfoMempool); ok && len(validTxs) > 0 {
+		tSignerPreExtract := time.Now()
 		signerInfoByTxIndex = make([]any, len(txs))
 		signerInfos := extractor.PreExtractSignerInfo(validTxs)
 		for i, txIdx := range validTxIndices {
@@ -977,17 +980,31 @@ func (app *BaseApp) executeTxs(ctx context.Context, txs [][]byte) ([]*abci.ExecT
 				signerInfoByTxIndex[txIdx] = signerInfos[i]
 			}
 		}
+		blockTxTimings.signerPreExtractMs += elapsedMsSince(tSignerPreExtract)
 	}
 
 	// Precompute stateless tx runtime data before sequential state execution.
 	var runtimeInfoByTxIndex []*txRuntimeInfo
 	if len(validTxs) > 0 {
+		tRuntimePrebuild := time.Now()
 		runtimeInfoByTxIndex = make([]*txRuntimeInfo, len(txs))
 		runtimeInfos := app.prebuildTxRuntimeInfos(validTxs, true)
+		blockTxTimings.runtimePrebuildWallMs += elapsedMsSince(tRuntimePrebuild)
 		for i, txIdx := range validTxIndices {
 			if i < len(runtimeInfos) {
-				runtimeInfoByTxIndex[txIdx] = runtimeInfos[i]
+				info := runtimeInfos[i]
+				runtimeInfoByTxIndex[txIdx] = info
+				if info != nil {
+					blockTxTimings.runtimePrebuildKnownMs += info.timing.totalMs
+					blockTxTimings.getMsgsMs += info.timing.getMsgsMs
+					blockTxTimings.validateBasicMs += info.timing.validateBasicMs
+					blockTxTimings.routeLookupMs += info.timing.routeLookupMs
+					blockTxTimings.getMsgsV2Ms += info.timing.getMsgsV2Ms
+				}
 			}
+		}
+		if blockTxTimings.runtimePrebuildWallMs > blockTxTimings.runtimePrebuildKnownMs {
+			blockTxTimings.runtimePrebuildOverhead = blockTxTimings.runtimePrebuildWallMs - blockTxTimings.runtimePrebuildKnownMs
 		}
 	}
 
@@ -1008,6 +1025,7 @@ func (app *BaseApp) executeTxs(ctx context.Context, txs [][]byte) ([]*abci.ExecT
 			// In the case where a transaction included in a block proposal is malformed,
 			// we still want to return a default response to comet. This is because comet
 			// expects a response for each transaction included in a block proposal.
+			tInvalidResponse := time.Now()
 			response = sdkerrors.ResponseExecTxResultWithEvents(
 				sdkerrors.ErrTxDecode,
 				0,
@@ -1015,61 +1033,104 @@ func (app *BaseApp) executeTxs(ctx context.Context, txs [][]byte) ([]*abci.ExecT
 				nil,
 				false,
 			)
+			blockTxTimings.invalidTxResponseMs += elapsedMsSince(tInvalidResponse)
 		}
 
 		// check after every tx if we should abort
+		tCancelCheck := time.Now()
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		default:
 			// continue
 		}
+		blockTxTimings.cancelCheckMs += elapsedMsSince(tCancelCheck)
 
+		tAppendResult := time.Now()
 		txResults = append(txResults, response)
+		blockTxTimings.appendTxResultMs += elapsedMsSince(tAppendResult)
 	}
 	height := app.finalizeBlockState.Context().BlockHeight()
 	fmt.Printf("msg=execute_txs_substep height=%d etx1_ante_ms=%.3f etx2_msgs_ms=%.3f etx3_post_ms=%.3f\n",
-		height, blockTxAnteMs, blockTxMsgsMs, blockTxPostMs)
-	fmt.Printf("msg=run_msgs_substep_timing height=%d rms0_total_ms=%.3f rms0_init_ms=%.3f rms0_loop_setup_ms=%.3f rms1_route_check_ms=%.3f rms2_msg_handler_ms=%.3f rms3_create_events_ms=%.3f rms4_tag_msg_index_ms=%.3f rms5_append_events_ms=%.3f rms6_collect_response_ms=%.3f rms7_make_abci_data_ms=%.3f rms8_to_abci_events_ms=%.3f rms9_result_build_ms=%.3f rms10_loop_total_ms=%.3f rms11_loop_framework_ms=%.3f rms12_post_loop_total_ms=%.3f rms13_post_loop_framework_ms=%.3f rms14_accumulate_ms=%.3f\n",
+		height, blockTxTimings.anteMs, blockTxTimings.msgsMs, blockTxTimings.postMs)
+	fmt.Printf("msg=execute_txs_framework_timing height=%d etxf_ctx_init_ms=%.3f etxf_tx_decode_ms=%.3f etxf_signer_preextract_ms=%.3f etxf_runtime_prebuild_wall_ms=%.3f etxf_runtime_prebuild_known_ms=%.3f etxf_runtime_prebuild_overhead_ms=%.3f etxf_runtime_total_ms=%.3f etxf_get_msgs_ms=%.3f etxf_validate_basic_ms=%.3f etxf_route_lookup_ms=%.3f etxf_get_msgs_v2_ms=%.3f etxf_ante_cache_context_ms=%.3f etxf_ante_cache_write_ms=%.3f etxf_ante_events_to_abci_ms=%.3f etxf_mempool_remove_ms=%.3f etxf_runmsg_cache_context_ms=%.3f etxf_runmsg_cache_write_ms=%.3f etxf_block_gas_consume_ms=%.3f etxf_event_merge_ms=%.3f etxf_stream_events_ms=%.3f etxf_response_build_ms=%.3f etxf_error_response_build_ms=%.3f etxf_invalid_tx_response_ms=%.3f etxf_cancel_check_ms=%.3f etxf_append_tx_result_ms=%.3f etxf_telemetry_ms=%.3f txd_calls=%d txd_errors=%d txd_total_ms=%.3f txd_adr027_ms=%.3f txd_txraw_unknown_ms=%.3f txd_txraw_unmarshal_ms=%.3f txd_body_unknown_ms=%.3f txd_body_unmarshal_ms=%.3f txd_auth_unknown_ms=%.3f txd_auth_unmarshal_ms=%.3f txd_wrapper_build_ms=%.3f\n",
 		height,
-		blockRunMsgsSubsteps.totalMs,
-		blockRunMsgsSubsteps.initMs,
-		blockRunMsgsSubsteps.loopSetupMs,
-		blockRunMsgsSubsteps.routeCheckMs,
-		blockRunMsgsSubsteps.msgHandlerMs,
-		blockRunMsgsSubsteps.createEventsMs,
-		blockRunMsgsSubsteps.tagMsgIndexMs,
-		blockRunMsgsSubsteps.appendEventsMs,
-		blockRunMsgsSubsteps.collectResponseMs,
-		blockRunMsgsSubsteps.makeABCIDataMs,
-		blockRunMsgsSubsteps.toABCIEventsMs,
-		blockRunMsgsSubsteps.resultBuildMs,
-		blockRunMsgsSubsteps.loopTotalMs,
-		blockRunMsgsSubsteps.loopFrameworkMs,
-		blockRunMsgsSubsteps.postLoopTotalMs,
-		blockRunMsgsSubsteps.postLoopFrameworkMs,
-		blockRunMsgsSubsteps.accumulateMs,
+		blockTxTimings.ctxInitMs,
+		blockTxTimings.txDecodeMs,
+		blockTxTimings.signerPreExtractMs,
+		blockTxTimings.runtimePrebuildWallMs,
+		blockTxTimings.runtimePrebuildKnownMs,
+		blockTxTimings.runtimePrebuildOverhead,
+		blockTxTimings.runtimeTotalMs,
+		blockTxTimings.getMsgsMs,
+		blockTxTimings.validateBasicMs,
+		blockTxTimings.routeLookupMs,
+		blockTxTimings.getMsgsV2Ms,
+		blockTxTimings.anteCacheContextMs,
+		blockTxTimings.anteCacheWriteMs,
+		blockTxTimings.anteEventsToABCIMs,
+		blockTxTimings.mempoolRemoveMs,
+		blockTxTimings.runMsgCacheContextMs,
+		blockTxTimings.runMsgCacheWriteMs,
+		blockTxTimings.blockGasConsumeMs,
+		blockTxTimings.eventMergeMs,
+		blockTxTimings.streamEventsMs,
+		blockTxTimings.responseBuildMs,
+		blockTxTimings.errorResponseBuildMs,
+		blockTxTimings.invalidTxResponseMs,
+		blockTxTimings.cancelCheckMs,
+		blockTxTimings.appendTxResultMs,
+		blockTxTimings.telemetryMs,
+		decoderTiming.Calls,
+		decoderTiming.Errors,
+		txtiming.NsToMs(decoderTiming.TotalNs),
+		txtiming.NsToMs(decoderTiming.ADR027Ns),
+		txtiming.NsToMs(decoderTiming.TxRawUnknownNs),
+		txtiming.NsToMs(decoderTiming.TxRawUnmarshalNs),
+		txtiming.NsToMs(decoderTiming.TxBodyUnknownNs),
+		txtiming.NsToMs(decoderTiming.TxBodyUnmarshalNs),
+		txtiming.NsToMs(decoderTiming.AuthUnknownNs),
+		txtiming.NsToMs(decoderTiming.AuthUnmarshalNs),
+		txtiming.NsToMs(decoderTiming.WrapperBuildNs),
 	)
-	app.perfMetrics.ExecuteTxsStepSeconds.With("step", "ante").Observe(blockTxAnteMs / 1000)
-	app.perfMetrics.ExecuteTxsStepSeconds.With("step", "msgs").Observe(blockTxMsgsMs / 1000)
-	app.perfMetrics.ExecuteTxsStepSeconds.With("step", "post").Observe(blockTxPostMs / 1000)
-	app.perfMetrics.RunMsgsSubstepSeconds.With("step", "total").Observe(blockRunMsgsSubsteps.totalMs / 1000)
-	app.perfMetrics.RunMsgsSubstepSeconds.With("step", "init").Observe(blockRunMsgsSubsteps.initMs / 1000)
-	app.perfMetrics.RunMsgsSubstepSeconds.With("step", "loop_setup").Observe(blockRunMsgsSubsteps.loopSetupMs / 1000)
-	app.perfMetrics.RunMsgsSubstepSeconds.With("step", "route_check").Observe(blockRunMsgsSubsteps.routeCheckMs / 1000)
-	app.perfMetrics.RunMsgsSubstepSeconds.With("step", "msg_handler").Observe(blockRunMsgsSubsteps.msgHandlerMs / 1000)
-	app.perfMetrics.RunMsgsSubstepSeconds.With("step", "create_events").Observe(blockRunMsgsSubsteps.createEventsMs / 1000)
-	app.perfMetrics.RunMsgsSubstepSeconds.With("step", "tag_msg_index").Observe(blockRunMsgsSubsteps.tagMsgIndexMs / 1000)
-	app.perfMetrics.RunMsgsSubstepSeconds.With("step", "append_events").Observe(blockRunMsgsSubsteps.appendEventsMs / 1000)
-	app.perfMetrics.RunMsgsSubstepSeconds.With("step", "collect_response").Observe(blockRunMsgsSubsteps.collectResponseMs / 1000)
-	app.perfMetrics.RunMsgsSubstepSeconds.With("step", "make_abci_data").Observe(blockRunMsgsSubsteps.makeABCIDataMs / 1000)
-	app.perfMetrics.RunMsgsSubstepSeconds.With("step", "to_abci_events").Observe(blockRunMsgsSubsteps.toABCIEventsMs / 1000)
-	app.perfMetrics.RunMsgsSubstepSeconds.With("step", "result_build").Observe(blockRunMsgsSubsteps.resultBuildMs / 1000)
-	app.perfMetrics.RunMsgsSubstepSeconds.With("step", "loop_total").Observe(blockRunMsgsSubsteps.loopTotalMs / 1000)
-	app.perfMetrics.RunMsgsSubstepSeconds.With("step", "loop_framework").Observe(blockRunMsgsSubsteps.loopFrameworkMs / 1000)
-	app.perfMetrics.RunMsgsSubstepSeconds.With("step", "post_loop_total").Observe(blockRunMsgsSubsteps.postLoopTotalMs / 1000)
-	app.perfMetrics.RunMsgsSubstepSeconds.With("step", "post_loop_framework").Observe(blockRunMsgsSubsteps.postLoopFrameworkMs / 1000)
-	app.perfMetrics.RunMsgsSubstepSeconds.With("step", "accumulate").Observe(blockRunMsgsSubsteps.accumulateMs / 1000)
+	app.perfMetrics.ExecuteTxsStepSeconds.With("step", "ante").Observe(blockTxTimings.anteMs / 1000)
+	app.perfMetrics.ExecuteTxsStepSeconds.With("step", "msgs").Observe(blockTxTimings.msgsMs / 1000)
+	app.perfMetrics.ExecuteTxsStepSeconds.With("step", "post").Observe(blockTxTimings.postMs / 1000)
+	app.observeExecuteTxsFramework("ctx_init", blockTxTimings.ctxInitMs)
+	app.observeExecuteTxsFramework("tx_decode", blockTxTimings.txDecodeMs)
+	app.observeExecuteTxsFramework("signer_preextract", blockTxTimings.signerPreExtractMs)
+	app.observeExecuteTxsFramework("runtime_prebuild_wall", blockTxTimings.runtimePrebuildWallMs)
+	app.observeExecuteTxsFramework("runtime_prebuild_known", blockTxTimings.runtimePrebuildKnownMs)
+	app.observeExecuteTxsFramework("runtime_prebuild_overhead", blockTxTimings.runtimePrebuildOverhead)
+	app.observeExecuteTxsFramework("runtime_total", blockTxTimings.runtimeTotalMs)
+	app.observeExecuteTxsFramework("get_msgs", blockTxTimings.getMsgsMs)
+	app.observeExecuteTxsFramework("validate_basic", blockTxTimings.validateBasicMs)
+	app.observeExecuteTxsFramework("route_lookup", blockTxTimings.routeLookupMs)
+	app.observeExecuteTxsFramework("get_msgs_v2", blockTxTimings.getMsgsV2Ms)
+	app.observeExecuteTxsFramework("ante_cache_context", blockTxTimings.anteCacheContextMs)
+	app.observeExecuteTxsFramework("ante_cache_write", blockTxTimings.anteCacheWriteMs)
+	app.observeExecuteTxsFramework("ante_events_to_abci", blockTxTimings.anteEventsToABCIMs)
+	app.observeExecuteTxsFramework("mempool_remove", blockTxTimings.mempoolRemoveMs)
+	app.observeExecuteTxsFramework("runmsg_cache_context", blockTxTimings.runMsgCacheContextMs)
+	app.observeExecuteTxsFramework("runmsg_cache_write", blockTxTimings.runMsgCacheWriteMs)
+	app.observeExecuteTxsFramework("block_gas_consume", blockTxTimings.blockGasConsumeMs)
+	app.observeExecuteTxsFramework("event_merge", blockTxTimings.eventMergeMs)
+	app.observeExecuteTxsFramework("stream_events", blockTxTimings.streamEventsMs)
+	app.observeExecuteTxsFramework("response_build", blockTxTimings.responseBuildMs)
+	app.observeExecuteTxsFramework("error_response_build", blockTxTimings.errorResponseBuildMs)
+	app.observeExecuteTxsFramework("invalid_tx_response", blockTxTimings.invalidTxResponseMs)
+	app.observeExecuteTxsFramework("cancel_check", blockTxTimings.cancelCheckMs)
+	app.observeExecuteTxsFramework("append_tx_result", blockTxTimings.appendTxResultMs)
+	app.observeExecuteTxsFramework("telemetry", blockTxTimings.telemetryMs)
+	app.observeExecuteTxsFramework("decoder_total", txtiming.NsToMs(decoderTiming.TotalNs))
+	app.observeExecuteTxsFramework("decoder_adr027", txtiming.NsToMs(decoderTiming.ADR027Ns))
+	app.observeExecuteTxsFramework("decoder_txraw_unknown", txtiming.NsToMs(decoderTiming.TxRawUnknownNs))
+	app.observeExecuteTxsFramework("decoder_txraw_unmarshal", txtiming.NsToMs(decoderTiming.TxRawUnmarshalNs))
+	app.observeExecuteTxsFramework("decoder_body_unknown", txtiming.NsToMs(decoderTiming.TxBodyUnknownNs))
+	app.observeExecuteTxsFramework("decoder_body_unmarshal", txtiming.NsToMs(decoderTiming.TxBodyUnmarshalNs))
+	app.observeExecuteTxsFramework("decoder_auth_unknown", txtiming.NsToMs(decoderTiming.AuthUnknownNs))
+	app.observeExecuteTxsFramework("decoder_auth_unmarshal", txtiming.NsToMs(decoderTiming.AuthUnmarshalNs))
+	app.observeExecuteTxsFramework("decoder_wrapper_build", txtiming.NsToMs(decoderTiming.WrapperBuildNs))
 	return txResults, nil
 }
 
