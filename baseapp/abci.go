@@ -1104,11 +1104,26 @@ func (app *BaseApp) executeTxs(ctx context.Context, txs [][]byte) ([]*abci.ExecT
 	if decoderOuterOverheadMs < 0 {
 		decoderOuterOverheadMs = 0
 	}
+	codecMs := blockTxTimings.txDecodeMs +
+		blockTxTimings.signerPreExtractMs +
+		blockTxTimings.runtimePrebuildWallMs +
+		blockTxTimings.anteEventsToABCIMs +
+		blockTxTimings.createEventsMs +
+		blockTxTimings.msgEventsToABCIMs +
+		blockTxTimings.txMsgDataMarshalMs +
+		blockTxTimings.eventMergeMs +
+		blockTxTimings.streamEventsMs +
+		blockTxTimings.responseBuildMs +
+		blockTxTimings.errorResponseBuildMs +
+		blockTxTimings.responseMarkEventsMs +
+		blockTxTimings.errorMarkEventsMs +
+		blockTxTimings.invalidTxResponseMs
 
 	app.perfMetrics.ExecuteTxsStepSeconds.With("step", "ante").Observe(blockTxTimings.anteMs / 1000)
 	app.perfMetrics.ExecuteTxsStepSeconds.With("step", "msgs").Observe(blockTxTimings.msgsMs / 1000)
 	app.perfMetrics.ExecuteTxsStepSeconds.With("step", "post").Observe(blockTxTimings.postMs / 1000)
 	app.observeExecuteTxsFramework("ctx_init", blockTxTimings.ctxInitMs)
+	app.observeExecuteTxsFramework("codec", codecMs)
 	app.observeExecuteTxsFramework("tx_decode", blockTxTimings.txDecodeMs)
 	app.observeExecuteTxsFramework("signer_preextract", blockTxTimings.signerPreExtractMs)
 	app.observeExecuteTxsFramework("runtime_prebuild_wall", blockTxTimings.runtimePrebuildWallMs)
