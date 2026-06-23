@@ -1022,7 +1022,7 @@ func (app *BaseApp) executeTxs(ctx context.Context, txs [][]byte) ([]*abci.ExecT
 	if len(validTxs) > 0 {
 		tRuntimePrebuild := time.Now()
 		runtimeInfoByTxIndex = make([]*txRuntimeInfo, len(txs))
-		runtimeInfos := app.prebuildTxRuntimeInfos(validTxs, true)
+		runtimeInfos := app.prebuildTxRuntimeInfos(validTxs, true, true)
 		blockTxTimings.runtimePrebuildWallMs += elapsedMsSince(tRuntimePrebuild)
 		for i, txIdx := range validTxIndices {
 			if i < len(runtimeInfos) {
@@ -1034,6 +1034,8 @@ func (app *BaseApp) executeTxs(ctx context.Context, txs [][]byte) ([]*abci.ExecT
 					blockTxTimings.validateBasicMs += info.timing.validateBasicMs
 					blockTxTimings.routeLookupMs += info.timing.routeLookupMs
 					blockTxTimings.getMsgsV2Ms += info.timing.getMsgsV2Ms
+					blockTxTimings.msgSignerExtractMs += info.timing.msgSignerExtractMs
+					blockTxTimings.msgSenderStringMs += info.timing.msgSenderStringMs
 				}
 			}
 		}

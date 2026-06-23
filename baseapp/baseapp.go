@@ -72,6 +72,10 @@ type preExtractSignerInfoMempool interface {
 	RemoveWithSignerInfo(sdk.Tx, any) error
 }
 
+type msgV2SignersTx interface {
+	GetMsgsV2Signers() ([][][]byte, error)
+}
+
 // txRuntimeInfo keeps stateless per-tx data computed before state execution.
 type txRuntimeInfo struct {
 	tx               sdk.Tx
@@ -87,11 +91,16 @@ type txRuntimeInfo struct {
 
 // msgRuntimeInfo keeps per-message data reused by routing and event creation.
 type msgRuntimeInfo struct {
-	msg        sdk.Msg
-	msgV2      protov2.Message
-	handler    MsgServiceHandler
-	typeURL    string
-	moduleName string
+	msg          sdk.Msg
+	msgV2        protov2.Message
+	handler      MsgServiceHandler
+	typeURL      string
+	moduleName   string
+	signers      [][]byte
+	signersReady bool
+	signerErr    error
+	sender       string
+	senderErr    error
 }
 
 // BaseApp reflects the ABCI application implementation.
@@ -712,11 +721,20 @@ func validateBasicTxMsgs(msgs []sdk.Msg) error {
 	return nil
 }
 
-func (app *BaseApp) buildTxRuntimeInfo(tx sdk.Tx, validateBasic bool) (info *txRuntimeInfo) {
+func (app *BaseApp) buildTxRuntimeInfo(tx sdk.Tx, validateBasic bool, precomputeEventMeta bool) (info *txRuntimeInfo) {
 	totalStart := time.Now()
 	info = &txRuntimeInfo{tx: tx}
 	defer func() {
 		info.timing.totalMs = elapsedMsSince(totalStart)
+		knownMs := info.timing.getMsgsMs +
+			info.timing.validateBasicMs +
+			info.timing.routeLookupMs +
+			info.timing.getMsgsV2Ms +
+			info.timing.msgSignerExtractMs +
+			info.timing.msgSenderStringMs
+		if info.timing.totalMs < knownMs {
+			info.timing.totalMs = knownMs
+		}
 		if r := recover(); r != nil {
 			// Preserve the old per-tx error path when prebuilding outside runTx recovery.
 			info.buildErr = fmt.Errorf("panic while building tx runtime info: %v", r)
@@ -772,8 +790,43 @@ func (app *BaseApp) buildTxRuntimeInfo(tx sdk.Tx, validateBasic bool) (info *txR
 		)
 		return info
 	}
+
+	var msgSigners [][][]byte
+	var msgSignersErr error
+	if precomputeEventMeta {
+		if signerTx, ok := tx.(msgV2SignersTx); ok {
+			stepStart = time.Now()
+			msgSigners, msgSignersErr = signerTx.GetMsgsV2Signers()
+			info.timing.msgSignerExtractMs += elapsedMsSince(stepStart)
+		}
+	}
+
 	for i := range info.msgInfos {
 		info.msgInfos[i].msgV2 = info.msgsV2[i]
+		if !precomputeEventMeta {
+			continue
+		}
+
+		info.msgInfos[i].signersReady = true
+		if msgSignersErr != nil {
+			info.msgInfos[i].signerErr = msgSignersErr
+			continue
+		}
+		if i < len(msgSigners) {
+			info.msgInfos[i].signers = msgSigners[i]
+		} else {
+			stepStart = time.Now()
+			info.msgInfos[i].signers, info.msgInfos[i].signerErr = app.cdc.GetMsgV2Signers(info.msgsV2[i])
+			info.timing.msgSignerExtractMs += elapsedMsSince(stepStart)
+		}
+		if info.msgInfos[i].signerErr != nil {
+			continue
+		}
+		if len(info.msgInfos[i].signers) > 0 && info.msgInfos[i].signers[0] != nil {
+			stepStart = time.Now()
+			info.msgInfos[i].sender, info.msgInfos[i].senderErr = app.cdc.InterfaceRegistry().SigningContext().AddressCodec().BytesToString(info.msgInfos[i].signers[0])
+			info.timing.msgSenderStringMs += elapsedMsSince(stepStart)
+		}
 	}
 
 	return info
@@ -783,6 +836,12 @@ func txRuntimeLockKey(tx sdk.Tx) uintptr {
 	v := reflect.ValueOf(tx)
 	if !v.IsValid() {
 		return 0
+	}
+	for v.Kind() == reflect.Interface {
+		if v.IsNil() {
+			return 0
+		}
+		v = v.Elem()
 	}
 
 	switch v.Kind() {
@@ -797,7 +856,7 @@ func txRuntimeLockKey(tx sdk.Tx) uintptr {
 }
 
 // prebuildTxRuntimeInfos parallelizes stateless tx preparation for a block.
-func (app *BaseApp) prebuildTxRuntimeInfos(txs []sdk.Tx, validateBasic bool) []*txRuntimeInfo {
+func (app *BaseApp) prebuildTxRuntimeInfos(txs []sdk.Tx, validateBasic bool, precomputeEventMeta bool) []*txRuntimeInfo {
 	infos := make([]*txRuntimeInfo, len(txs))
 	if len(txs) == 0 {
 		return infos
@@ -833,12 +892,12 @@ func (app *BaseApp) prebuildTxRuntimeInfos(txs []sdk.Tx, validateBasic bool) []*
 				tx := txs[txIdx]
 				if txLock := txLocks[txRuntimeLockKey(tx)]; txLock != nil {
 					txLock.Lock()
-					infos[txIdx] = app.buildTxRuntimeInfo(tx, validateBasic)
+					infos[txIdx] = app.buildTxRuntimeInfo(tx, validateBasic, precomputeEventMeta)
 					txLock.Unlock()
 					continue
 				}
 
-				infos[txIdx] = app.buildTxRuntimeInfo(tx, validateBasic)
+				infos[txIdx] = app.buildTxRuntimeInfo(tx, validateBasic, precomputeEventMeta)
 			}
 		}()
 	}
@@ -1122,11 +1181,13 @@ type executeTxsTiming struct {
 }
 
 type txRuntimeInfoTiming struct {
-	totalMs         float64
-	getMsgsMs       float64
-	validateBasicMs float64
-	routeLookupMs   float64
-	getMsgsV2Ms     float64
+	totalMs            float64
+	getMsgsMs          float64
+	validateBasicMs    float64
+	routeLookupMs      float64
+	getMsgsV2Ms        float64
+	msgSignerExtractMs float64
+	msgSenderStringMs  float64
 }
 
 func elapsedMsSince(start time.Time) float64 {
@@ -1229,7 +1290,7 @@ func (app *BaseApp) runTxWithMultiStore(
 	tRuntimeInfo := time.Now()
 	runtimeInfoBuiltHere := runtimeInfo == nil || runtimeInfo.tx != tx
 	if runtimeInfo == nil || runtimeInfo.tx != tx {
-		runtimeInfo = app.buildTxRuntimeInfo(tx, mode != execModeReCheck)
+		runtimeInfo = app.buildTxRuntimeInfo(tx, mode != execModeReCheck, false)
 	}
 	if mode == execModeFinalize && runtimeInfo != nil && runtimeInfoBuiltHere {
 		if runtimeInfo.timing.totalMs > 0 {
@@ -1510,24 +1571,36 @@ func createEvents(cdc codec.Codec, events sdk.Events, msgInfo msgRuntimeInfo, re
 	msgEvent := sdk.NewEvent(sdk.EventTypeMessage, sdk.NewAttribute(sdk.AttributeKeyAction, msgInfo.typeURL))
 
 	// we set the signer attribute as the sender
-	tSignerExtract := time.Now()
-	signers, err := cdc.GetMsgV2Signers(msgInfo.msgV2)
-	if recordTiming {
-		blockTxTimings.msgSignerExtractMs += elapsedMsSince(tSignerExtract)
-	}
-	if err != nil {
-		return nil, err
-	}
-	if len(signers) > 0 && signers[0] != nil {
-		tSenderString := time.Now()
-		addrStr, err := cdc.InterfaceRegistry().SigningContext().AddressCodec().BytesToString(signers[0])
+	if msgInfo.signersReady {
+		if msgInfo.signerErr != nil {
+			return nil, msgInfo.signerErr
+		}
+		if msgInfo.senderErr != nil {
+			return nil, msgInfo.senderErr
+		}
+		if msgInfo.sender != "" {
+			msgEvent = msgEvent.AppendAttributes(sdk.NewAttribute(sdk.AttributeKeySender, msgInfo.sender))
+		}
+	} else {
+		tSignerExtract := time.Now()
+		signers, err := cdc.GetMsgV2Signers(msgInfo.msgV2)
 		if recordTiming {
-			blockTxTimings.msgSenderStringMs += elapsedMsSince(tSenderString)
+			blockTxTimings.msgSignerExtractMs += elapsedMsSince(tSignerExtract)
 		}
 		if err != nil {
 			return nil, err
 		}
-		msgEvent = msgEvent.AppendAttributes(sdk.NewAttribute(sdk.AttributeKeySender, addrStr))
+		if len(signers) > 0 && signers[0] != nil {
+			tSenderString := time.Now()
+			addrStr, err := cdc.InterfaceRegistry().SigningContext().AddressCodec().BytesToString(signers[0])
+			if recordTiming {
+				blockTxTimings.msgSenderStringMs += elapsedMsSince(tSenderString)
+			}
+			if err != nil {
+				return nil, err
+			}
+			msgEvent = msgEvent.AppendAttributes(sdk.NewAttribute(sdk.AttributeKeySender, addrStr))
+		}
 	}
 
 	// verify that events have no module attribute set
