@@ -999,12 +999,15 @@ func (app *BaseApp) deliverTxWithMultiStore(tx []byte, memTx sdk.Tx, txIndex int
 	gInfo, result, anteEvents, err := app.runTxWithMultiStore(execModeFinalize, tx, memTx, txIndex, txMultiStore, incarnationCache, signerInfo, runtimeInfo)
 	if err != nil {
 		resultStr = "failed"
+		tMarkEvents := time.Now()
+		markedEvents := sdk.MarkEventsToIndex(anteEvents, app.indexEvents)
+		blockTxTimings.errorMarkEventsMs += elapsedMsSince(tMarkEvents)
 		tErrorResponse := time.Now()
 		resp = sdkerrors.ResponseExecTxResultWithEvents(
 			err,
 			gInfo.GasWanted,
 			gInfo.GasUsed,
-			sdk.MarkEventsToIndex(anteEvents, app.indexEvents),
+			markedEvents,
 			app.trace,
 		)
 		blockTxTimings.errorResponseBuildMs += elapsedMsSince(tErrorResponse)
@@ -1016,13 +1019,16 @@ func (app *BaseApp) deliverTxWithMultiStore(tx []byte, memTx sdk.Tx, txIndex int
 	app.AddStreamEvents(ctx.BlockHeight(), ctx.BlockTime(), result.Events, false)
 	blockTxTimings.streamEventsMs += elapsedMsSince(tStreamEvents)
 
+	tMarkEvents := time.Now()
+	markedEvents := sdk.MarkEventsToIndex(result.Events, app.indexEvents)
+	blockTxTimings.responseMarkEventsMs += elapsedMsSince(tMarkEvents)
 	tResponseBuild := time.Now()
 	resp = &abci.ExecTxResult{
 		GasWanted: int64(gInfo.GasWanted),
 		GasUsed:   int64(gInfo.GasUsed),
 		Log:       result.Log,
 		Data:      result.Data,
-		Events:    sdk.MarkEventsToIndex(result.Events, app.indexEvents),
+		Events:    markedEvents,
 	}
 	blockTxTimings.responseBuildMs += elapsedMsSince(tResponseBuild)
 
@@ -1098,6 +1104,8 @@ type executeTxsTiming struct {
 	streamEventsMs          float64
 	responseBuildMs         float64
 	errorResponseBuildMs    float64
+	responseMarkEventsMs    float64
+	errorMarkEventsMs       float64
 	telemetryMs             float64
 	invalidTxResponseMs     float64
 	cancelCheckMs           float64
@@ -1106,6 +1114,11 @@ type executeTxsTiming struct {
 	runtimePrebuildWallMs   float64
 	runtimePrebuildKnownMs  float64
 	runtimePrebuildOverhead float64
+	createEventsMs          float64
+	msgSignerExtractMs      float64
+	msgSenderStringMs       float64
+	msgEventsToABCIMs       float64
+	txMsgDataMarshalMs      float64
 }
 
 type txRuntimeInfoTiming struct {
@@ -1430,7 +1443,11 @@ func (app *BaseApp) runMsgs(ctx sdk.Context, txInfo *txRuntimeInfo, mode execMod
 		}
 
 		// create message events
-		msgEvents, err := createEvents(app.cdc, msgResult.GetEvents(), msgInfo)
+		tCreateEvents := time.Now()
+		msgEvents, err := createEvents(app.cdc, msgResult.GetEvents(), msgInfo, mode == execModeFinalize)
+		if mode == execModeFinalize {
+			blockTxTimings.createEventsMs += elapsedMsSince(tCreateEvents)
+		}
 		if err != nil {
 			return nil, errorsmod.Wrapf(err, "failed to create message events; message index: %d", i)
 		}
@@ -1460,12 +1477,20 @@ func (app *BaseApp) runMsgs(ctx sdk.Context, txInfo *txRuntimeInfo, mode execMod
 		}
 	}
 
+	tMakeABCIData := time.Now()
 	data, err := makeABCIData(msgResponses)
+	if mode == execModeFinalize {
+		blockTxTimings.txMsgDataMarshalMs += elapsedMsSince(tMakeABCIData)
+	}
 	if err != nil {
 		return nil, errorsmod.Wrap(err, "failed to marshal tx data")
 	}
 
+	tMsgEventsToABCI := time.Now()
 	abciEvents := events.ToABCIEvents()
+	if mode == execModeFinalize {
+		blockTxTimings.msgEventsToABCIMs += elapsedMsSince(tMsgEventsToABCI)
+	}
 
 	result := &sdk.Result{
 		Data:         data,
@@ -1481,16 +1506,24 @@ func makeABCIData(msgResponses []*codectypes.Any) ([]byte, error) {
 	return proto.Marshal(&sdk.TxMsgData{MsgResponses: msgResponses})
 }
 
-func createEvents(cdc codec.Codec, events sdk.Events, msgInfo msgRuntimeInfo) (sdk.Events, error) {
+func createEvents(cdc codec.Codec, events sdk.Events, msgInfo msgRuntimeInfo, recordTiming bool) (sdk.Events, error) {
 	msgEvent := sdk.NewEvent(sdk.EventTypeMessage, sdk.NewAttribute(sdk.AttributeKeyAction, msgInfo.typeURL))
 
 	// we set the signer attribute as the sender
+	tSignerExtract := time.Now()
 	signers, err := cdc.GetMsgV2Signers(msgInfo.msgV2)
+	if recordTiming {
+		blockTxTimings.msgSignerExtractMs += elapsedMsSince(tSignerExtract)
+	}
 	if err != nil {
 		return nil, err
 	}
 	if len(signers) > 0 && signers[0] != nil {
+		tSenderString := time.Now()
 		addrStr, err := cdc.InterfaceRegistry().SigningContext().AddressCodec().BytesToString(signers[0])
+		if recordTiming {
+			blockTxTimings.msgSenderStringMs += elapsedMsSince(tSenderString)
+		}
 		if err != nil {
 			return nil, err
 		}

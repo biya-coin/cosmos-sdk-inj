@@ -1051,9 +1051,30 @@ func (app *BaseApp) executeTxs(ctx context.Context, txs [][]byte) ([]*abci.ExecT
 		blockTxTimings.appendTxResultMs += elapsedMsSince(tAppendResult)
 	}
 	height := app.finalizeBlockState.Context().BlockHeight()
+	decoderTotalMs := txtiming.NsToMs(decoderTiming.TotalNs)
+	decoderADR027Ms := txtiming.NsToMs(decoderTiming.ADR027Ns)
+	decoderTxRawUnknownMs := txtiming.NsToMs(decoderTiming.TxRawUnknownNs)
+	decoderTxRawUnmarshalMs := txtiming.NsToMs(decoderTiming.TxRawUnmarshalNs)
+	decoderBodyUnknownMs := txtiming.NsToMs(decoderTiming.TxBodyUnknownNs)
+	decoderBodyUnmarshalMs := txtiming.NsToMs(decoderTiming.TxBodyUnmarshalNs)
+	decoderAuthUnknownMs := txtiming.NsToMs(decoderTiming.AuthUnknownNs)
+	decoderAuthUnmarshalMs := txtiming.NsToMs(decoderTiming.AuthUnmarshalNs)
+	decoderWrapperBuildMs := txtiming.NsToMs(decoderTiming.WrapperBuildNs)
+	decoderKnownMs := decoderADR027Ms + decoderTxRawUnknownMs + decoderTxRawUnmarshalMs +
+		decoderBodyUnknownMs + decoderBodyUnmarshalMs + decoderAuthUnknownMs +
+		decoderAuthUnmarshalMs + decoderWrapperBuildMs
+	decoderUnaccountedMs := decoderTotalMs - decoderKnownMs
+	if decoderUnaccountedMs < 0 {
+		decoderUnaccountedMs = 0
+	}
+	decoderOuterOverheadMs := blockTxTimings.txDecodeMs - decoderTotalMs
+	if decoderOuterOverheadMs < 0 {
+		decoderOuterOverheadMs = 0
+	}
+
 	fmt.Printf("msg=execute_txs_substep height=%d etx1_ante_ms=%.3f etx2_msgs_ms=%.3f etx3_post_ms=%.3f\n",
 		height, blockTxTimings.anteMs, blockTxTimings.msgsMs, blockTxTimings.postMs)
-	fmt.Printf("msg=execute_txs_framework_timing height=%d etxf_ctx_init_ms=%.3f etxf_tx_decode_ms=%.3f etxf_signer_preextract_ms=%.3f etxf_runtime_prebuild_wall_ms=%.3f etxf_runtime_prebuild_known_ms=%.3f etxf_runtime_prebuild_overhead_ms=%.3f etxf_runtime_total_ms=%.3f etxf_get_msgs_ms=%.3f etxf_validate_basic_ms=%.3f etxf_route_lookup_ms=%.3f etxf_get_msgs_v2_ms=%.3f etxf_ante_cache_context_ms=%.3f etxf_ante_cache_write_ms=%.3f etxf_ante_events_to_abci_ms=%.3f etxf_mempool_remove_ms=%.3f etxf_runmsg_cache_context_ms=%.3f etxf_runmsg_cache_write_ms=%.3f etxf_block_gas_consume_ms=%.3f etxf_event_merge_ms=%.3f etxf_stream_events_ms=%.3f etxf_response_build_ms=%.3f etxf_error_response_build_ms=%.3f etxf_invalid_tx_response_ms=%.3f etxf_cancel_check_ms=%.3f etxf_append_tx_result_ms=%.3f etxf_telemetry_ms=%.3f txd_calls=%d txd_errors=%d txd_total_ms=%.3f txd_adr027_ms=%.3f txd_txraw_unknown_ms=%.3f txd_txraw_unmarshal_ms=%.3f txd_body_unknown_ms=%.3f txd_body_unmarshal_ms=%.3f txd_auth_unknown_ms=%.3f txd_auth_unmarshal_ms=%.3f txd_wrapper_build_ms=%.3f\n",
+	fmt.Printf("msg=execute_txs_framework_timing height=%d etxf_ctx_init_ms=%.3f etxf_tx_decode_ms=%.3f etxf_signer_preextract_ms=%.3f etxf_runtime_prebuild_wall_ms=%.3f etxf_runtime_prebuild_known_ms=%.3f etxf_runtime_prebuild_overhead_ms=%.3f etxf_runtime_total_ms=%.3f etxf_get_msgs_ms=%.3f etxf_validate_basic_ms=%.3f etxf_route_lookup_ms=%.3f etxf_get_msgs_v2_ms=%.3f etxf_ante_cache_context_ms=%.3f etxf_ante_cache_write_ms=%.3f etxf_ante_events_to_abci_ms=%.3f etxf_mempool_remove_ms=%.3f etxf_runmsg_cache_context_ms=%.3f etxf_runmsg_cache_write_ms=%.3f etxf_block_gas_consume_ms=%.3f etxf_event_merge_ms=%.3f etxf_stream_events_ms=%.3f etxf_response_build_ms=%.3f etxf_error_response_build_ms=%.3f etxf_response_mark_events_ms=%.3f etxf_error_mark_events_ms=%.3f etxf_invalid_tx_response_ms=%.3f etxf_cancel_check_ms=%.3f etxf_append_tx_result_ms=%.3f etxf_telemetry_ms=%.3f etxf_create_events_ms=%.3f etxf_msg_signer_extract_ms=%.3f etxf_msg_sender_string_ms=%.3f etxf_msg_events_to_abci_ms=%.3f etxf_tx_msg_data_marshal_ms=%.3f txd_calls=%d txd_errors=%d txd_total_ms=%.3f txd_outer_overhead_ms=%.3f txd_unaccounted_ms=%.3f txd_adr027_ms=%.3f txd_txraw_unknown_ms=%.3f txd_txraw_unmarshal_ms=%.3f txd_body_unknown_ms=%.3f txd_body_unmarshal_ms=%.3f txd_auth_unknown_ms=%.3f txd_auth_unmarshal_ms=%.3f txd_wrapper_build_ms=%.3f\n",
 		height,
 		blockTxTimings.ctxInitMs,
 		blockTxTimings.txDecodeMs,
@@ -1077,21 +1098,30 @@ func (app *BaseApp) executeTxs(ctx context.Context, txs [][]byte) ([]*abci.ExecT
 		blockTxTimings.streamEventsMs,
 		blockTxTimings.responseBuildMs,
 		blockTxTimings.errorResponseBuildMs,
+		blockTxTimings.responseMarkEventsMs,
+		blockTxTimings.errorMarkEventsMs,
 		blockTxTimings.invalidTxResponseMs,
 		blockTxTimings.cancelCheckMs,
 		blockTxTimings.appendTxResultMs,
 		blockTxTimings.telemetryMs,
+		blockTxTimings.createEventsMs,
+		blockTxTimings.msgSignerExtractMs,
+		blockTxTimings.msgSenderStringMs,
+		blockTxTimings.msgEventsToABCIMs,
+		blockTxTimings.txMsgDataMarshalMs,
 		decoderTiming.Calls,
 		decoderTiming.Errors,
-		txtiming.NsToMs(decoderTiming.TotalNs),
-		txtiming.NsToMs(decoderTiming.ADR027Ns),
-		txtiming.NsToMs(decoderTiming.TxRawUnknownNs),
-		txtiming.NsToMs(decoderTiming.TxRawUnmarshalNs),
-		txtiming.NsToMs(decoderTiming.TxBodyUnknownNs),
-		txtiming.NsToMs(decoderTiming.TxBodyUnmarshalNs),
-		txtiming.NsToMs(decoderTiming.AuthUnknownNs),
-		txtiming.NsToMs(decoderTiming.AuthUnmarshalNs),
-		txtiming.NsToMs(decoderTiming.WrapperBuildNs),
+		decoderTotalMs,
+		decoderOuterOverheadMs,
+		decoderUnaccountedMs,
+		decoderADR027Ms,
+		decoderTxRawUnknownMs,
+		decoderTxRawUnmarshalMs,
+		decoderBodyUnknownMs,
+		decoderBodyUnmarshalMs,
+		decoderAuthUnknownMs,
+		decoderAuthUnmarshalMs,
+		decoderWrapperBuildMs,
 	)
 	app.perfMetrics.ExecuteTxsStepSeconds.With("step", "ante").Observe(blockTxTimings.anteMs / 1000)
 	app.perfMetrics.ExecuteTxsStepSeconds.With("step", "msgs").Observe(blockTxTimings.msgsMs / 1000)
@@ -1118,19 +1148,28 @@ func (app *BaseApp) executeTxs(ctx context.Context, txs [][]byte) ([]*abci.ExecT
 	app.observeExecuteTxsFramework("stream_events", blockTxTimings.streamEventsMs)
 	app.observeExecuteTxsFramework("response_build", blockTxTimings.responseBuildMs)
 	app.observeExecuteTxsFramework("error_response_build", blockTxTimings.errorResponseBuildMs)
+	app.observeExecuteTxsFramework("response_mark_events", blockTxTimings.responseMarkEventsMs)
+	app.observeExecuteTxsFramework("error_mark_events", blockTxTimings.errorMarkEventsMs)
 	app.observeExecuteTxsFramework("invalid_tx_response", blockTxTimings.invalidTxResponseMs)
 	app.observeExecuteTxsFramework("cancel_check", blockTxTimings.cancelCheckMs)
 	app.observeExecuteTxsFramework("append_tx_result", blockTxTimings.appendTxResultMs)
 	app.observeExecuteTxsFramework("telemetry", blockTxTimings.telemetryMs)
-	app.observeExecuteTxsFramework("decoder_total", txtiming.NsToMs(decoderTiming.TotalNs))
-	app.observeExecuteTxsFramework("decoder_adr027", txtiming.NsToMs(decoderTiming.ADR027Ns))
-	app.observeExecuteTxsFramework("decoder_txraw_unknown", txtiming.NsToMs(decoderTiming.TxRawUnknownNs))
-	app.observeExecuteTxsFramework("decoder_txraw_unmarshal", txtiming.NsToMs(decoderTiming.TxRawUnmarshalNs))
-	app.observeExecuteTxsFramework("decoder_body_unknown", txtiming.NsToMs(decoderTiming.TxBodyUnknownNs))
-	app.observeExecuteTxsFramework("decoder_body_unmarshal", txtiming.NsToMs(decoderTiming.TxBodyUnmarshalNs))
-	app.observeExecuteTxsFramework("decoder_auth_unknown", txtiming.NsToMs(decoderTiming.AuthUnknownNs))
-	app.observeExecuteTxsFramework("decoder_auth_unmarshal", txtiming.NsToMs(decoderTiming.AuthUnmarshalNs))
-	app.observeExecuteTxsFramework("decoder_wrapper_build", txtiming.NsToMs(decoderTiming.WrapperBuildNs))
+	app.observeExecuteTxsFramework("create_events", blockTxTimings.createEventsMs)
+	app.observeExecuteTxsFramework("msg_signer_extract", blockTxTimings.msgSignerExtractMs)
+	app.observeExecuteTxsFramework("msg_sender_string", blockTxTimings.msgSenderStringMs)
+	app.observeExecuteTxsFramework("msg_events_to_abci", blockTxTimings.msgEventsToABCIMs)
+	app.observeExecuteTxsFramework("tx_msg_data_marshal", blockTxTimings.txMsgDataMarshalMs)
+	app.observeExecuteTxsFramework("decoder_total", decoderTotalMs)
+	app.observeExecuteTxsFramework("decoder_outer_overhead", decoderOuterOverheadMs)
+	app.observeExecuteTxsFramework("decoder_unaccounted", decoderUnaccountedMs)
+	app.observeExecuteTxsFramework("decoder_adr027", decoderADR027Ms)
+	app.observeExecuteTxsFramework("decoder_txraw_unknown", decoderTxRawUnknownMs)
+	app.observeExecuteTxsFramework("decoder_txraw_unmarshal", decoderTxRawUnmarshalMs)
+	app.observeExecuteTxsFramework("decoder_body_unknown", decoderBodyUnknownMs)
+	app.observeExecuteTxsFramework("decoder_body_unmarshal", decoderBodyUnmarshalMs)
+	app.observeExecuteTxsFramework("decoder_auth_unknown", decoderAuthUnknownMs)
+	app.observeExecuteTxsFramework("decoder_auth_unmarshal", decoderAuthUnmarshalMs)
+	app.observeExecuteTxsFramework("decoder_wrapper_build", decoderWrapperBuildMs)
 	return txResults, nil
 }
 
