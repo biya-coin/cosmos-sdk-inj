@@ -1,8 +1,7 @@
 package baseapp
 
 // Metrics contains Prometheus metrics for BaseApp performance instrumentation.
-// These histograms mirror every field already logged via Loki (fmt.Printf),
-// so both observability pipelines stay in sync.
+// These histograms are the source of truth for ExecuteTxs performance data.
 //
 // Follow the same pattern as CometBFT internal/consensus/metrics.go:
 //   - Metrics is a plain struct with metrics.Histogram interface fields.
@@ -43,12 +42,10 @@ type perfMetrics struct {
 	InternalFinalizeBlockStepSeconds cmtmetrics.Histogram
 
 	// ── executeTxs 各子步骤（秒） ─────────────────────────────────────────
-	// 对应 Loki msg=execute_txs_substep
 	// Labels: step = ante | msgs | post
 	ExecuteTxsStepSeconds cmtmetrics.Histogram
 
 	// ExecuteTxs framework sub-step durations.
-	// Labels mirror msg=execute_txs_framework_timing fields.
 	ExecuteTxsFrameworkSeconds cmtmetrics.Histogram
 
 	// ── FinalizeBlock 各子步骤（秒） ──────────────────────────────────────

@@ -1084,7 +1084,6 @@ func (app *BaseApp) executeTxs(ctx context.Context, txs [][]byte) ([]*abci.ExecT
 		txResults = append(txResults, response)
 		blockTxTimings.appendTxResultMs += elapsedMsSince(tAppendResult)
 	}
-	height := app.finalizeBlockState.Context().BlockHeight()
 	decoderTotalMs := txtiming.NsToMs(decoderTiming.TotalNs)
 	decoderADR027Ms := txtiming.NsToMs(decoderTiming.ADR027Ns)
 	decoderTxRawUnknownMs := txtiming.NsToMs(decoderTiming.TxRawUnknownNs)
@@ -1106,57 +1105,6 @@ func (app *BaseApp) executeTxs(ctx context.Context, txs [][]byte) ([]*abci.ExecT
 		decoderOuterOverheadMs = 0
 	}
 
-	fmt.Printf("msg=execute_txs_substep height=%d etx1_ante_ms=%.3f etx2_msgs_ms=%.3f etx3_post_ms=%.3f\n",
-		height, blockTxTimings.anteMs, blockTxTimings.msgsMs, blockTxTimings.postMs)
-	fmt.Printf("msg=execute_txs_framework_timing height=%d etxf_ctx_init_ms=%.3f etxf_tx_decode_ms=%.3f etxf_signer_preextract_ms=%.3f etxf_runtime_prebuild_wall_ms=%.3f etxf_runtime_prebuild_known_ms=%.3f etxf_runtime_prebuild_overhead_ms=%.3f etxf_runtime_total_ms=%.3f etxf_get_msgs_ms=%.3f etxf_validate_basic_ms=%.3f etxf_route_lookup_ms=%.3f etxf_get_msgs_v2_ms=%.3f etxf_ante_cache_context_ms=%.3f etxf_ante_cache_write_ms=%.3f etxf_ante_events_to_abci_ms=%.3f etxf_mempool_remove_ms=%.3f etxf_runmsg_cache_context_ms=%.3f etxf_runmsg_cache_write_ms=%.3f etxf_block_gas_consume_ms=%.3f etxf_event_merge_ms=%.3f etxf_stream_events_ms=%.3f etxf_response_build_ms=%.3f etxf_error_response_build_ms=%.3f etxf_response_mark_events_ms=%.3f etxf_error_mark_events_ms=%.3f etxf_invalid_tx_response_ms=%.3f etxf_cancel_check_ms=%.3f etxf_append_tx_result_ms=%.3f etxf_telemetry_ms=%.3f etxf_create_events_ms=%.3f etxf_msg_signer_extract_ms=%.3f etxf_msg_sender_string_ms=%.3f etxf_msg_events_to_abci_ms=%.3f etxf_tx_msg_data_marshal_ms=%.3f txd_calls=%d txd_errors=%d txd_total_ms=%.3f txd_outer_overhead_ms=%.3f txd_unaccounted_ms=%.3f txd_adr027_ms=%.3f txd_txraw_unknown_ms=%.3f txd_txraw_unmarshal_ms=%.3f txd_body_unknown_ms=%.3f txd_body_unmarshal_ms=%.3f txd_auth_unknown_ms=%.3f txd_auth_unmarshal_ms=%.3f txd_wrapper_build_ms=%.3f\n",
-		height,
-		blockTxTimings.ctxInitMs,
-		blockTxTimings.txDecodeMs,
-		blockTxTimings.signerPreExtractMs,
-		blockTxTimings.runtimePrebuildWallMs,
-		blockTxTimings.runtimePrebuildKnownMs,
-		blockTxTimings.runtimePrebuildOverhead,
-		blockTxTimings.runtimeTotalMs,
-		blockTxTimings.getMsgsMs,
-		blockTxTimings.validateBasicMs,
-		blockTxTimings.routeLookupMs,
-		blockTxTimings.getMsgsV2Ms,
-		blockTxTimings.anteCacheContextMs,
-		blockTxTimings.anteCacheWriteMs,
-		blockTxTimings.anteEventsToABCIMs,
-		blockTxTimings.mempoolRemoveMs,
-		blockTxTimings.runMsgCacheContextMs,
-		blockTxTimings.runMsgCacheWriteMs,
-		blockTxTimings.blockGasConsumeMs,
-		blockTxTimings.eventMergeMs,
-		blockTxTimings.streamEventsMs,
-		blockTxTimings.responseBuildMs,
-		blockTxTimings.errorResponseBuildMs,
-		blockTxTimings.responseMarkEventsMs,
-		blockTxTimings.errorMarkEventsMs,
-		blockTxTimings.invalidTxResponseMs,
-		blockTxTimings.cancelCheckMs,
-		blockTxTimings.appendTxResultMs,
-		blockTxTimings.telemetryMs,
-		blockTxTimings.createEventsMs,
-		blockTxTimings.msgSignerExtractMs,
-		blockTxTimings.msgSenderStringMs,
-		blockTxTimings.msgEventsToABCIMs,
-		blockTxTimings.txMsgDataMarshalMs,
-		decoderTiming.Calls,
-		decoderTiming.Errors,
-		decoderTotalMs,
-		decoderOuterOverheadMs,
-		decoderUnaccountedMs,
-		decoderADR027Ms,
-		decoderTxRawUnknownMs,
-		decoderTxRawUnmarshalMs,
-		decoderBodyUnknownMs,
-		decoderBodyUnmarshalMs,
-		decoderAuthUnknownMs,
-		decoderAuthUnmarshalMs,
-		decoderWrapperBuildMs,
-	)
 	app.perfMetrics.ExecuteTxsStepSeconds.With("step", "ante").Observe(blockTxTimings.anteMs / 1000)
 	app.perfMetrics.ExecuteTxsStepSeconds.With("step", "msgs").Observe(blockTxTimings.msgsMs / 1000)
 	app.perfMetrics.ExecuteTxsStepSeconds.With("step", "post").Observe(blockTxTimings.postMs / 1000)
