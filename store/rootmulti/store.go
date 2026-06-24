@@ -530,15 +530,6 @@ func (rs *Store) Commit() types.CommitID {
 		rs.flushMetadata(rs.db, version, rs.lastCommitInfo)
 		flushMetadataMs = float64(time.Since(tFlushMetadata).Nanoseconds()) / 1e6
 		totalMs := float64(time.Since(commitStart).Nanoseconds()) / 1e6
-		fmt.Printf("msg=rootmulti_commit_timing height=%d version_calc_ms=%.3f commit_stores_ms=%.3f flush_metadata_ms=%.3f cleanup_removed_ms=%.3f prune_ms=%.3f total_ms=%.3f\n",
-			version,
-			versionMs,
-			commitStoresMs,
-			flushMetadataMs,
-			cleanupRemovedMs,
-			pruneMs,
-			totalMs,
-		)
 		RootmultiCommitStepSeconds.WithLabelValues("total").Observe(totalMs / 1000)
 		RootmultiCommitStepSeconds.WithLabelValues("version_calc").Observe(versionMs / 1000)
 		RootmultiCommitStepSeconds.WithLabelValues("commit_stores").Observe(commitStoresMs / 1000)
@@ -1291,17 +1282,7 @@ func commitStores(version int64, storeMap map[types.StoreKey]types.CommitStore, 
 		storeCommitMs := float64(time.Since(storeCommitStart).Nanoseconds()) / 1e6
 
 		storeType := store.GetStoreType()
-		if storeCommitMs > 1 {
-			fmt.Printf("msg=rootmulti_commit_store_timing height=%d store=%s store_type=%v last_version=%d commit_version=%d commit_ms=%.3f reused_last=%t\n",
-				version,
-				key.Name(),
-				storeType,
-				last.Version,
-				commitID.Version,
-				storeCommitMs,
-				last.Version >= version,
-			)
-		}
+		RootmultiCommitStoreSeconds.WithLabelValues(key.Name(), fmt.Sprint(storeType), fmt.Sprint(last.Version >= version)).Observe(storeCommitMs / 1000)
 		if storeType == types.StoreTypeTransient || storeType == types.StoreTypeMemory || storeType == types.StoreTypeObject {
 			continue
 		}
@@ -1317,7 +1298,8 @@ func commitStores(version int64, storeMap map[types.StoreKey]types.CommitStore, 
 	sort.SliceStable(storeInfos, func(i, j int) bool {
 		return strings.Compare(storeInfos[i].Name, storeInfos[j].Name) < 0
 	})
-	fmt.Printf("msg=rootmulti_commit_stores_timing height=%d store_count=%d total_ms=%.3f\n", version, len(storeKeys), float64(time.Since(commitStoresStart).Nanoseconds())/1e6)
+	RootmultiCommitStoresSeconds.Observe(time.Since(commitStoresStart).Seconds())
+	RootmultiCommitStoresCount.Set(float64(len(storeKeys)))
 
 	return &types.CommitInfo{
 		Version:    version,
