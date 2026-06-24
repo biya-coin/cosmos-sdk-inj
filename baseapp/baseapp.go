@@ -72,6 +72,14 @@ type preExtractSignerInfoMempool interface {
 	RemoveWithSignerInfo(sdk.Tx, any) error
 }
 
+type preExtractSingleSignerInfoMempool interface {
+	PreExtractSignerInfoForTx(sdk.Tx, int) any
+}
+
+type firstSignerInfo interface {
+	FirstSignerBytes() []byte
+}
+
 type msgV2SignersTx interface {
 	GetMsgsV2Signers() ([][][]byte, error)
 }
@@ -720,7 +728,21 @@ func validateBasicTxMsgs(msgs []sdk.Msg) error {
 	return nil
 }
 
+func firstSignerBytes(info any) []byte {
+	if info == nil {
+		return nil
+	}
+	if typedInfo, ok := info.(firstSignerInfo); ok {
+		return typedInfo.FirstSignerBytes()
+	}
+	return nil
+}
+
 func (app *BaseApp) buildTxRuntimeInfo(tx sdk.Tx, validateBasic bool, precomputeEventMeta bool) (info *txRuntimeInfo) {
+	return app.buildTxRuntimeInfoWithSignerInfo(tx, validateBasic, precomputeEventMeta, nil)
+}
+
+func (app *BaseApp) buildTxRuntimeInfoWithSignerInfo(tx sdk.Tx, validateBasic bool, precomputeEventMeta bool, signerInfo any) (info *txRuntimeInfo) {
 	info = &txRuntimeInfo{tx: tx}
 	defer func() {
 		if r := recover(); r != nil {
@@ -774,8 +796,15 @@ func (app *BaseApp) buildTxRuntimeInfo(tx sdk.Tx, validateBasic bool, precompute
 	var msgSigners [][][]byte
 	var msgSignersErr error
 	if precomputeEventMeta {
-		if signerTx, ok := tx.(msgV2SignersTx); ok {
-			msgSigners, msgSignersErr = signerTx.GetMsgsV2Signers()
+		if len(info.msgInfos) == 1 {
+			if signer := firstSignerBytes(signerInfo); signer != nil {
+				msgSigners = [][][]byte{{signer}}
+			}
+		}
+		if msgSigners == nil {
+			if signerTx, ok := tx.(msgV2SignersTx); ok {
+				msgSigners, msgSignersErr = signerTx.GetMsgsV2Signers()
+			}
 		}
 	}
 
@@ -829,31 +858,23 @@ func txRuntimeLockKey(tx sdk.Tx) uintptr {
 	}
 }
 
-// prebuildTxRuntimeInfos parallelizes stateless tx preparation for a block.
-func (app *BaseApp) prebuildTxRuntimeInfos(txs []sdk.Tx, validateBasic bool, precomputeEventMeta bool) []*txRuntimeInfo {
-	infos := make([]*txRuntimeInfo, len(txs))
-	if len(txs) == 0 {
-		return infos
+func (app *BaseApp) preprocessBlockTxs(txBytes [][]byte, validateBasic bool, precomputeEventMeta bool) ([]sdk.Tx, []*txRuntimeInfo, []any) {
+	decodedTxs := make([]sdk.Tx, len(txBytes))
+	runtimeInfos := make([]*txRuntimeInfo, len(txBytes))
+	signerInfos := make([]any, len(txBytes))
+	if len(txBytes) == 0 {
+		return decodedTxs, runtimeInfos, signerInfos
 	}
 
-	// A cached decoder may return the same lazy tx wrapper for duplicate bytes.
-	txLocks := make(map[uintptr]*sync.Mutex, len(txs))
-	for _, tx := range txs {
-		key := txRuntimeLockKey(tx)
-		if key == 0 {
-			continue
-		}
-		if _, ok := txLocks[key]; !ok {
-			txLocks[key] = &sync.Mutex{}
-		}
-	}
+	signerExtractor, _ := app.mempool.(preExtractSingleSignerInfoMempool)
+	var txLocks sync.Map
 
 	workerCount := runtime.GOMAXPROCS(0)
 	if workerCount < 1 {
 		workerCount = 1
 	}
-	if workerCount > len(txs) {
-		workerCount = len(txs)
+	if workerCount > len(txBytes) {
+		workerCount = len(txBytes)
 	}
 
 	var wg sync.WaitGroup
@@ -863,26 +884,40 @@ func (app *BaseApp) prebuildTxRuntimeInfos(txs []sdk.Tx, validateBasic bool, pre
 		go func() {
 			defer wg.Done()
 			for txIdx := range jobs {
-				tx := txs[txIdx]
-				if txLock := txLocks[txRuntimeLockKey(tx)]; txLock != nil {
+				tx, err := app.txDecoder(txBytes[txIdx])
+				if err != nil {
+					continue
+				}
+
+				decodedTxs[txIdx] = tx
+				build := func() {
+					if signerExtractor != nil {
+						signerInfos[txIdx] = signerExtractor.PreExtractSignerInfoForTx(tx, txIdx)
+					}
+					runtimeInfos[txIdx] = app.buildTxRuntimeInfoWithSignerInfo(tx, validateBasic, precomputeEventMeta, signerInfos[txIdx])
+				}
+
+				if key := txRuntimeLockKey(tx); key != 0 {
+					lockAny, _ := txLocks.LoadOrStore(key, &sync.Mutex{})
+					txLock := lockAny.(*sync.Mutex)
 					txLock.Lock()
-					infos[txIdx] = app.buildTxRuntimeInfo(tx, validateBasic, precomputeEventMeta)
+					build()
 					txLock.Unlock()
 					continue
 				}
 
-				infos[txIdx] = app.buildTxRuntimeInfo(tx, validateBasic, precomputeEventMeta)
+				build()
 			}
 		}()
 	}
 
-	for txIdx := range txs {
+	for txIdx := range txBytes {
 		jobs <- txIdx
 	}
 	close(jobs)
 	wg.Wait()
 
-	return infos
+	return decodedTxs, runtimeInfos, signerInfos
 }
 
 func (app *BaseApp) getState(mode execMode) *state {

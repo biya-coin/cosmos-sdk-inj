@@ -3,11 +3,9 @@ package baseapp
 import (
 	"context"
 	"fmt"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/InjectiveLabs/metrics"
@@ -955,74 +953,7 @@ func (app *BaseApp) executeTxs(ctx context.Context, txs [][]byte) ([]*abci.ExecT
 	blockTxMsgsMs = 0
 	blockTxPostMs = 0
 
-	decodedTxs := make([]sdk.Tx, len(txs))
-	if len(txs) > 0 {
-		workerCount := runtime.GOMAXPROCS(0)
-		if workerCount < 1 {
-			workerCount = 1
-		}
-		if workerCount > len(txs) {
-			workerCount = len(txs)
-		}
-
-		jobs := make(chan int)
-		var wg sync.WaitGroup
-		wg.Add(workerCount)
-		for workerIdx := 0; workerIdx < workerCount; workerIdx++ {
-			go func() {
-				defer wg.Done()
-				for txIdx := range jobs {
-					memTx, err := app.txDecoder(txs[txIdx])
-					if err != nil {
-						continue
-					}
-
-					// Keep decoded txs indexed so state execution stays deterministic.
-					decodedTxs[txIdx] = memTx
-				}
-			}()
-		}
-
-		for txIdx := range txs {
-			jobs <- txIdx
-		}
-		close(jobs)
-		wg.Wait()
-	}
-
-	validTxs := make([]sdk.Tx, 0, len(txs))
-	validTxIndices := make([]int, 0, len(txs))
-	for txIdx, memTx := range decodedTxs {
-		if memTx == nil {
-			continue
-		}
-
-		validTxs = append(validTxs, memTx)
-		validTxIndices = append(validTxIndices, txIdx)
-	}
-
-	var signerInfoByTxIndex []any
-	if extractor, ok := app.mempool.(preExtractSignerInfoMempool); ok && len(validTxs) > 0 {
-		signerInfoByTxIndex = make([]any, len(txs))
-		signerInfos := extractor.PreExtractSignerInfo(validTxs)
-		for i, txIdx := range validTxIndices {
-			if i < len(signerInfos) {
-				signerInfoByTxIndex[txIdx] = signerInfos[i]
-			}
-		}
-	}
-
-	// Precompute stateless tx runtime data before sequential state execution.
-	var runtimeInfoByTxIndex []*txRuntimeInfo
-	if len(validTxs) > 0 {
-		runtimeInfoByTxIndex = make([]*txRuntimeInfo, len(txs))
-		runtimeInfos := app.prebuildTxRuntimeInfos(validTxs, true, true)
-		for i, txIdx := range validTxIndices {
-			if i < len(runtimeInfos) {
-				runtimeInfoByTxIndex[txIdx] = runtimeInfos[i]
-			}
-		}
-	}
+	decodedTxs, runtimeInfoByTxIndex, signerInfoByTxIndex := app.preprocessBlockTxs(txs, true, true)
 
 	for txIdx, rawTx := range txs {
 		var response *abci.ExecTxResult
