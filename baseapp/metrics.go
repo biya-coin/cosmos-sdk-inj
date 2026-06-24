@@ -43,6 +43,7 @@ type perfMetrics struct {
 	InternalFinalizeBlockStepSeconds cmtmetrics.Histogram
 
 	// ── executeTxs 各子步骤（秒） ─────────────────────────────────────────
+	// 对应 Loki msg=execute_txs_substep
 	// Labels: step = ante | msgs | post
 	ExecuteTxsStepSeconds cmtmetrics.Histogram
 

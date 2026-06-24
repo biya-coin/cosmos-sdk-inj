@@ -950,6 +950,10 @@ func (app *BaseApp) internalFinalizeBlock(ctx context.Context, req *abci.Finaliz
 
 func (app *BaseApp) executeTxs(ctx context.Context, txs [][]byte) ([]*abci.ExecTxResult, error) {
 	txResults := make([]*abci.ExecTxResult, 0, len(txs))
+	// Reset block-scoped sub-step accumulators before processing any tx.
+	blockTxAnteMs = 0
+	blockTxMsgsMs = 0
+	blockTxPostMs = 0
 
 	decodedTxs := make([]sdk.Tx, len(txs))
 	if len(txs) > 0 {
@@ -1056,6 +1060,12 @@ func (app *BaseApp) executeTxs(ctx context.Context, txs [][]byte) ([]*abci.ExecT
 
 		txResults = append(txResults, response)
 	}
+	height := app.finalizeBlockState.Context().BlockHeight()
+	fmt.Printf("msg=execute_txs_substep height=%d etx1_ante_ms=%.3f etx2_msgs_ms=%.3f etx3_post_ms=%.3f\n",
+		height, blockTxAnteMs, blockTxMsgsMs, blockTxPostMs)
+	app.perfMetrics.ExecuteTxsStepSeconds.With("step", "ante").Observe(blockTxAnteMs / 1000)
+	app.perfMetrics.ExecuteTxsStepSeconds.With("step", "msgs").Observe(blockTxMsgsMs / 1000)
+	app.perfMetrics.ExecuteTxsStepSeconds.With("step", "post").Observe(blockTxPostMs / 1000)
 	return txResults, nil
 }
 
