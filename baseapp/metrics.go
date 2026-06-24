@@ -1,8 +1,6 @@
 package baseapp
 
 // Metrics contains Prometheus metrics for BaseApp performance instrumentation.
-// These histograms mirror every field already logged via Loki (fmt.Printf),
-// so both observability pipelines stay in sync.
 //
 // Follow the same pattern as CometBFT internal/consensus/metrics.go:
 //   - Metrics is a plain struct with metrics.Histogram interface fields.
@@ -33,27 +31,22 @@ const metricsSubsystem = "baseapp"
 // perfMetrics holds all custom performance histograms for BaseApp.
 type perfMetrics struct {
 	// ── PrepareProposal 各子步骤（秒） ─────────────────────────────────────
-	// 对应 Loki msg=baseapp_prepare_proposal_timing
 	// Labels: step = total | build_header | set_state | set_ctx | prepare
 	PrepareProposalStepSeconds cmtmetrics.Histogram
 
 	// ── internalFinalizeBlock 各子步骤（秒） ──────────────────────────────
-	// 对应 Loki msg=app_internal_finalize_block
 	// Labels: step = total | begin_block | execute_txs | end_block
 	InternalFinalizeBlockStepSeconds cmtmetrics.Histogram
 
 	// ── executeTxs 各子步骤（秒） ─────────────────────────────────────────
-	// 对应 Loki msg=execute_txs_substep
 	// Labels: step = ante | msgs | post
 	ExecuteTxsStepSeconds cmtmetrics.Histogram
 
 	// ── FinalizeBlock 各子步骤（秒） ──────────────────────────────────────
-	// 对应 Loki msg=app_finalize_block
 	// Labels: step = total | oe_wait | internal_exec | working_hash
 	FinalizeBlockStepSeconds cmtmetrics.Histogram
 
 	// ── BaseApp Commit 子步骤（秒） ──────────────────────────────────────
-	// 对应 Loki msg=baseapp_commit_timing
 	// Labels: step = total | cms_commit
 	BaseAppCommitStepSeconds cmtmetrics.Histogram
 

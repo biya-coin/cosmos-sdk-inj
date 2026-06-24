@@ -38,8 +38,10 @@ type wrapper struct {
 
 	txBodyHasUnknownNonCriticals bool
 
-	signers [][]byte
-	msgsV2  []protov2.Message
+	msgs       []sdk.Msg
+	signers    [][]byte
+	msgSigners [][][]byte
+	msgsV2     []protov2.Message
 }
 
 var (
@@ -71,7 +73,10 @@ func newBuilder(cdc codec.Codec) *wrapper {
 }
 
 func (w *wrapper) GetMsgs() []sdk.Msg {
-	return w.tx.GetMsgs()
+	if w.msgs == nil {
+		w.msgs = w.tx.GetMsgs()
+	}
+	return w.msgs
 }
 
 func (w *wrapper) GetMsgsV2() ([]protov2.Message, error) {
@@ -83,6 +88,17 @@ func (w *wrapper) GetMsgsV2() ([]protov2.Message, error) {
 	}
 
 	return w.msgsV2, nil
+}
+
+func (w *wrapper) GetMsgsV2Signers() ([][][]byte, error) {
+	if w.msgsV2 == nil || w.msgSigners == nil {
+		err := w.initSignersAndMsgsV2()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return w.msgSigners, nil
 }
 
 func (w *wrapper) ValidateBasic() error {
@@ -144,7 +160,18 @@ func (w *wrapper) getAuthInfoBytes() []byte {
 
 func (w *wrapper) initSignersAndMsgsV2() error {
 	var err error
-	w.signers, w.msgsV2, err = w.tx.GetSigners(w.cdc)
+	w.signers, w.msgsV2, w.msgSigners, err = w.tx.GetSignersWithMsgSigners(w.cdc)
+	if err == nil && w.msgs == nil {
+		msgs := make([]sdk.Msg, len(w.msgsV2))
+		for i, msg := range w.msgsV2 {
+			sdkMsg, ok := msg.(sdk.Msg)
+			if !ok {
+				return nil
+			}
+			msgs[i] = sdkMsg
+		}
+		w.msgs = msgs
+	}
 	return err
 }
 
@@ -268,8 +295,10 @@ func (w *wrapper) SetMsgs(msgs ...sdk.Msg) error {
 	// set bodyBz to nil because the cached bodyBz no longer matches tx.Body
 	w.bodyBz = nil
 
-	// reset signers and msgsV2
+	// reset cached message data
+	w.msgs = nil
 	w.signers = nil
+	w.msgSigners = nil
 	w.msgsV2 = nil
 
 	return nil
