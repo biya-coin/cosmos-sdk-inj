@@ -949,30 +949,7 @@ func (app *BaseApp) executeTxs(ctx context.Context, txs [][]byte) ([]*abci.ExecT
 	blockTxMsgsMs = 0
 	blockTxPostMs = 0
 
-	decodedTxs := make([]sdk.Tx, len(txs))
-	var validTxs []sdk.Tx
-	var validTxIndices []int
-	for txIdx, rawTx := range txs {
-		memTx, err := app.txDecoder(rawTx)
-		if err != nil {
-			continue
-		}
-
-		decodedTxs[txIdx] = memTx
-		validTxs = append(validTxs, memTx)
-		validTxIndices = append(validTxIndices, txIdx)
-	}
-
-	var signerInfoByTxIndex []any
-	if extractor, ok := app.mempool.(preExtractSignerInfoMempool); ok && len(validTxs) > 0 {
-		signerInfoByTxIndex = make([]any, len(txs))
-		signerInfos := extractor.PreExtractSignerInfo(validTxs)
-		for i, txIdx := range validTxIndices {
-			if i < len(signerInfos) {
-				signerInfoByTxIndex[txIdx] = signerInfos[i]
-			}
-		}
-	}
+	decodedTxs, runtimeInfoByTxIndex, signerInfoByTxIndex := app.preprocessBlockTxs(txs, true, true)
 
 	for txIdx, rawTx := range txs {
 		var response *abci.ExecTxResult
@@ -982,7 +959,11 @@ func (app *BaseApp) executeTxs(ctx context.Context, txs [][]byte) ([]*abci.ExecT
 			if signerInfoByTxIndex != nil {
 				signerInfo = signerInfoByTxIndex[txIdx]
 			}
-			response = app.deliverTx(rawTx, memTx, txIdx, signerInfo)
+			var runtimeInfo *txRuntimeInfo
+			if runtimeInfoByTxIndex != nil {
+				runtimeInfo = runtimeInfoByTxIndex[txIdx]
+			}
+			response = app.deliverTx(rawTx, memTx, txIdx, signerInfo, runtimeInfo)
 		} else {
 			// In the case where a transaction included in a block proposal is malformed,
 			// we still want to return a default response to comet. This is because comet

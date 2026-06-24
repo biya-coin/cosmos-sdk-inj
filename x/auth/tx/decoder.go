@@ -16,9 +16,9 @@ import (
 
 // DefaultTxDecoder returns a default protobuf TxDecoder using the provided Marshaler.
 func DefaultTxDecoder(cdc codec.Codec) sdk.TxDecoder {
-	return func(txBytes []byte) (sdk.Tx, error) {
+	return func(txBytes []byte) (decoded sdk.Tx, err error) {
 		// Make sure txBytes follow ADR-027.
-		err := rejectNonADR027TxRaw(txBytes)
+		err = rejectNonADR027TxRaw(txBytes)
 		if err != nil {
 			return nil, errorsmod.Wrap(sdkerrors.ErrTxDecode, err.Error())
 		}
@@ -68,13 +68,14 @@ func DefaultTxDecoder(cdc codec.Codec) sdk.TxDecoder {
 			Signatures: raw.Signatures,
 		}
 
-		return &wrapper{
+		decoded = &wrapper{
 			tx:                           theTx,
 			bodyBz:                       raw.BodyBytes,
 			authInfoBz:                   raw.AuthInfoBytes,
 			txBodyHasUnknownNonCriticals: txBodyHasUnknownNonCriticals,
 			cdc:                          cdc,
-		}, nil
+		}
+		return decoded, nil
 	}
 }
 

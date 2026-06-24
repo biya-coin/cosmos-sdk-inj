@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"reflect"
+	"runtime"
 	"sort"
 	"strconv"
 	"sync"
@@ -68,6 +70,44 @@ var _ servertypes.ABCI = (*BaseApp)(nil)
 type preExtractSignerInfoMempool interface {
 	PreExtractSignerInfo([]sdk.Tx) []any
 	RemoveWithSignerInfo(sdk.Tx, any) error
+}
+
+type preExtractSingleSignerInfoMempool interface {
+	PreExtractSignerInfoForTx(sdk.Tx, int) any
+}
+
+type firstSignerInfo interface {
+	FirstSignerBytes() []byte
+}
+
+type msgV2SignersTx interface {
+	GetMsgsV2Signers() ([][][]byte, error)
+}
+
+// txRuntimeInfo keeps stateless per-tx data computed before state execution.
+type txRuntimeInfo struct {
+	tx               sdk.Tx
+	msgs             []sdk.Msg
+	msgsV2           []protov2.Message
+	msgInfos         []msgRuntimeInfo
+	buildErr         error
+	validateBasicErr error
+	routeErr         error
+	msgsV2Err        error
+}
+
+// msgRuntimeInfo keeps per-message data reused by routing and event creation.
+type msgRuntimeInfo struct {
+	msg          sdk.Msg
+	msgV2        protov2.Message
+	handler      MsgServiceHandler
+	typeURL      string
+	moduleName   string
+	signers      [][]byte
+	signersReady bool
+	signerErr    error
+	sender       string
+	senderErr    error
 }
 
 // BaseApp reflects the ABCI application implementation.
@@ -688,6 +728,198 @@ func validateBasicTxMsgs(msgs []sdk.Msg) error {
 	return nil
 }
 
+func firstSignerBytes(info any) []byte {
+	if info == nil {
+		return nil
+	}
+	if typedInfo, ok := info.(firstSignerInfo); ok {
+		return typedInfo.FirstSignerBytes()
+	}
+	return nil
+}
+
+func (app *BaseApp) buildTxRuntimeInfo(tx sdk.Tx, validateBasic bool, precomputeEventMeta bool) (info *txRuntimeInfo) {
+	return app.buildTxRuntimeInfoWithSignerInfo(tx, validateBasic, precomputeEventMeta, nil)
+}
+
+func (app *BaseApp) buildTxRuntimeInfoWithSignerInfo(tx sdk.Tx, validateBasic bool, precomputeEventMeta bool, signerInfo any) (info *txRuntimeInfo) {
+	info = &txRuntimeInfo{tx: tx}
+	defer func() {
+		if r := recover(); r != nil {
+			// Preserve the old per-tx error path when prebuilding outside runTx recovery.
+			info.buildErr = fmt.Errorf("panic while building tx runtime info: %v", r)
+		}
+	}()
+
+	if tx == nil {
+		info.buildErr = errorsmod.Wrap(sdkerrors.ErrTxDecode, "missing decoded tx")
+		return info
+	}
+
+	info.msgs = tx.GetMsgs()
+	if validateBasic {
+		info.validateBasicErr = validateBasicTxMsgs(info.msgs)
+		if info.validateBasicErr != nil {
+			return info
+		}
+	}
+
+	info.msgInfos = make([]msgRuntimeInfo, 0, len(info.msgs))
+	for _, msg := range info.msgs {
+		msgInfo := msgRuntimeInfo{
+			msg:     msg,
+			handler: app.msgServiceRouter.Handler(msg),
+			typeURL: sdk.MsgTypeURL(msg),
+		}
+		if msgInfo.handler == nil {
+			info.routeErr = errorsmod.Wrapf(sdkerrors.ErrUnknownRequest, "no message handler found for %T", msg)
+			return info
+		}
+		msgInfo.moduleName = sdk.GetModuleNameFromTypeURL(msgInfo.typeURL)
+		info.msgInfos = append(info.msgInfos, msgInfo)
+	}
+
+	info.msgsV2, info.msgsV2Err = tx.GetMsgsV2()
+	if info.msgsV2Err != nil {
+		return info
+	}
+	if len(info.msgsV2) != len(info.msgInfos) {
+		info.msgsV2Err = errorsmod.Wrapf(
+			sdkerrors.ErrLogic,
+			"message count mismatch: msgs=%d msgsV2=%d",
+			len(info.msgInfos),
+			len(info.msgsV2),
+		)
+		return info
+	}
+
+	var msgSigners [][][]byte
+	var msgSignersErr error
+	if precomputeEventMeta {
+		if len(info.msgInfos) == 1 {
+			if signer := firstSignerBytes(signerInfo); signer != nil {
+				msgSigners = [][][]byte{{signer}}
+			}
+		}
+		if msgSigners == nil {
+			if signerTx, ok := tx.(msgV2SignersTx); ok {
+				msgSigners, msgSignersErr = signerTx.GetMsgsV2Signers()
+			}
+		}
+	}
+
+	for i := range info.msgInfos {
+		info.msgInfos[i].msgV2 = info.msgsV2[i]
+		if !precomputeEventMeta {
+			continue
+		}
+
+		info.msgInfos[i].signersReady = true
+		if msgSignersErr != nil {
+			info.msgInfos[i].signerErr = msgSignersErr
+			continue
+		}
+		if i < len(msgSigners) {
+			info.msgInfos[i].signers = msgSigners[i]
+		} else {
+			info.msgInfos[i].signers, info.msgInfos[i].signerErr = app.cdc.GetMsgV2Signers(info.msgsV2[i])
+		}
+		if info.msgInfos[i].signerErr != nil {
+			continue
+		}
+		if len(info.msgInfos[i].signers) > 0 && info.msgInfos[i].signers[0] != nil {
+			info.msgInfos[i].sender, info.msgInfos[i].senderErr = app.cdc.InterfaceRegistry().SigningContext().AddressCodec().BytesToString(info.msgInfos[i].signers[0])
+		}
+	}
+
+	return info
+}
+
+func txRuntimeLockKey(tx sdk.Tx) uintptr {
+	v := reflect.ValueOf(tx)
+	if !v.IsValid() {
+		return 0
+	}
+	for v.Kind() == reflect.Interface {
+		if v.IsNil() {
+			return 0
+		}
+		v = v.Elem()
+	}
+
+	switch v.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Map, reflect.Pointer, reflect.Slice, reflect.UnsafePointer:
+		if v.IsNil() {
+			return 0
+		}
+		return v.Pointer()
+	default:
+		return 0
+	}
+}
+
+func (app *BaseApp) preprocessBlockTxs(txBytes [][]byte, validateBasic bool, precomputeEventMeta bool) ([]sdk.Tx, []*txRuntimeInfo, []any) {
+	decodedTxs := make([]sdk.Tx, len(txBytes))
+	runtimeInfos := make([]*txRuntimeInfo, len(txBytes))
+	signerInfos := make([]any, len(txBytes))
+	if len(txBytes) == 0 {
+		return decodedTxs, runtimeInfos, signerInfos
+	}
+
+	signerExtractor, _ := app.mempool.(preExtractSingleSignerInfoMempool)
+	var txLocks sync.Map
+
+	workerCount := runtime.GOMAXPROCS(0)
+	if workerCount < 1 {
+		workerCount = 1
+	}
+	if workerCount > len(txBytes) {
+		workerCount = len(txBytes)
+	}
+
+	var wg sync.WaitGroup
+	jobs := make(chan int)
+	wg.Add(workerCount)
+	for workerIdx := 0; workerIdx < workerCount; workerIdx++ {
+		go func() {
+			defer wg.Done()
+			for txIdx := range jobs {
+				tx, err := app.txDecoder(txBytes[txIdx])
+				if err != nil {
+					continue
+				}
+
+				decodedTxs[txIdx] = tx
+				build := func() {
+					if signerExtractor != nil {
+						signerInfos[txIdx] = signerExtractor.PreExtractSignerInfoForTx(tx, txIdx)
+					}
+					runtimeInfos[txIdx] = app.buildTxRuntimeInfoWithSignerInfo(tx, validateBasic, precomputeEventMeta, signerInfos[txIdx])
+				}
+
+				if key := txRuntimeLockKey(tx); key != 0 {
+					lockAny, _ := txLocks.LoadOrStore(key, &sync.Mutex{})
+					txLock := lockAny.(*sync.Mutex)
+					txLock.Lock()
+					build()
+					txLock.Unlock()
+					continue
+				}
+
+				build()
+			}
+		}()
+	}
+
+	for txIdx := range txBytes {
+		jobs <- txIdx
+	}
+	close(jobs)
+	wg.Wait()
+
+	return decodedTxs, runtimeInfos, signerInfos
+}
+
 func (app *BaseApp) getState(mode execMode) *state {
 	switch mode {
 	case execModeFinalize:
@@ -813,11 +1045,11 @@ func (app *BaseApp) beginBlock(_ *abci.FinalizeBlockRequest) (sdk.BeginBlock, er
 	return resp, nil
 }
 
-func (app *BaseApp) deliverTx(tx []byte, memTx sdk.Tx, txIndex int, signerInfo any) *abci.ExecTxResult {
-	return app.deliverTxWithMultiStore(tx, memTx, txIndex, nil, nil, signerInfo)
+func (app *BaseApp) deliverTx(tx []byte, memTx sdk.Tx, txIndex int, signerInfo any, runtimeInfo *txRuntimeInfo) *abci.ExecTxResult {
+	return app.deliverTxWithMultiStore(tx, memTx, txIndex, nil, nil, signerInfo, runtimeInfo)
 }
 
-func (app *BaseApp) deliverTxWithMultiStore(tx []byte, memTx sdk.Tx, txIndex int, txMultiStore storetypes.MultiStore, incarnationCache map[string]any, signerInfo any) *abci.ExecTxResult {
+func (app *BaseApp) deliverTxWithMultiStore(tx []byte, memTx sdk.Tx, txIndex int, txMultiStore storetypes.MultiStore, incarnationCache map[string]any, signerInfo any, runtimeInfo *txRuntimeInfo) *abci.ExecTxResult {
 	gInfo := sdk.GasInfo{}
 	resultStr := "successful"
 
@@ -830,14 +1062,15 @@ func (app *BaseApp) deliverTxWithMultiStore(tx []byte, memTx sdk.Tx, txIndex int
 		telemetry.SetGauge(float32(gInfo.GasWanted), "tx", "gas", "wanted")
 	}()
 
-	gInfo, result, anteEvents, err := app.runTxWithMultiStore(execModeFinalize, tx, memTx, txIndex, txMultiStore, incarnationCache, signerInfo)
+	gInfo, result, anteEvents, err := app.runTxWithMultiStore(execModeFinalize, tx, memTx, txIndex, txMultiStore, incarnationCache, signerInfo, runtimeInfo)
 	if err != nil {
 		resultStr = "failed"
+		markedEvents := sdk.MarkEventsToIndex(anteEvents, app.indexEvents)
 		resp = sdkerrors.ResponseExecTxResultWithEvents(
 			err,
 			gInfo.GasWanted,
 			gInfo.GasUsed,
-			sdk.MarkEventsToIndex(anteEvents, app.indexEvents),
+			markedEvents,
 			app.trace,
 		)
 		return resp
@@ -846,12 +1079,13 @@ func (app *BaseApp) deliverTxWithMultiStore(tx []byte, memTx sdk.Tx, txIndex int
 	ctx := app.finalizeBlockState.Context()
 	app.AddStreamEvents(ctx.BlockHeight(), ctx.BlockTime(), result.Events, false)
 
+	markedEvents := sdk.MarkEventsToIndex(result.Events, app.indexEvents)
 	resp = &abci.ExecTxResult{
 		GasWanted: int64(gInfo.GasWanted),
 		GasUsed:   int64(gInfo.GasUsed),
 		Log:       result.Log,
 		Data:      result.Data,
-		Events:    sdk.MarkEventsToIndex(result.Events, app.indexEvents),
+		Events:    markedEvents,
 	}
 
 	return resp
@@ -897,7 +1131,7 @@ func (app *BaseApp) endBlock(_ context.Context) (sdk.EndBlock, error) {
 // both txbytes and the decoded tx are passed to runTx to avoid the state machine encoding the tx and decoding the transaction twice
 // passing the decoded tx to runTX is optional, it will be decoded if the tx is nil
 func (app *BaseApp) runTx(mode execMode, txBytes []byte, tx sdk.Tx) (gInfo sdk.GasInfo, result *sdk.Result, anteEvents []abci.Event, err error) {
-	return app.runTxWithMultiStore(mode, txBytes, tx, -1, nil, nil, nil)
+	return app.runTxWithMultiStore(mode, txBytes, tx, -1, nil, nil, nil, nil)
 }
 
 // blockTxAnteMs, blockTxMsgsMs, blockTxPostMs are block-scoped accumulators
@@ -921,6 +1155,7 @@ func (app *BaseApp) runTxWithMultiStore(
 	txMultiStore storetypes.MultiStore,
 	incarnationCache map[string]any,
 	signerInfo any,
+	runtimeInfo *txRuntimeInfo,
 ) (gInfo sdk.GasInfo, result *sdk.Result, anteEvents []abci.Event, err error) {
 	// NOTE: GasWanted should be returned by the AnteHandler. GasUsed is
 	// determined by the GasMeter. We need access to the context to get the gas
@@ -983,30 +1218,23 @@ func (app *BaseApp) runTxWithMultiStore(
 			return sdk.GasInfo{}, nil, nil, err
 		}
 	}
-
-	tGetMsgs := time.Now()
-	msgs := tx.GetMsgs()
-	app.observeCheckTxRunTxSubstep(mode, "get_msgs", tGetMsgs)
-	// run validate basic if mode != recheck.
-	// as validate basic is stateless, it is guaranteed to pass recheck, given that its passed checkTx.
-	if mode != execModeReCheck {
-		tValidateBasic := time.Now()
-		if err := validateBasicTxMsgs(msgs); err != nil {
-			app.observeCheckTxRunTxSubstep(mode, "validate_basic", tValidateBasic)
-			return sdk.GasInfo{}, nil, nil, err
-		}
-		app.observeCheckTxRunTxSubstep(mode, "validate_basic", tValidateBasic)
+	tRuntimeInfo := time.Now()
+	if runtimeInfo == nil || runtimeInfo.tx != tx {
+		runtimeInfo = app.buildTxRuntimeInfo(tx, mode != execModeReCheck, false)
 	}
+	app.observeCheckTxRunTxSubstep(mode, "get_msgs", tRuntimeInfo)
+	app.observeCheckTxRunTxSubstep(mode, "validate_basic", tRuntimeInfo)
+	app.observeCheckTxRunTxSubstep(mode, "route_lookup", tRuntimeInfo)
 
-	tRouteLookup := time.Now()
-	for _, msg := range msgs {
-		handler := app.msgServiceRouter.Handler(msg)
-		if handler == nil {
-			app.observeCheckTxRunTxSubstep(mode, "route_lookup", tRouteLookup)
-			return sdk.GasInfo{}, nil, nil, errorsmod.Wrapf(sdkerrors.ErrUnknownRequest, "no message handler found for %T", msg)
-		}
+	if runtimeInfo.buildErr != nil {
+		return sdk.GasInfo{}, nil, nil, runtimeInfo.buildErr
 	}
-	app.observeCheckTxRunTxSubstep(mode, "route_lookup", tRouteLookup)
+	if runtimeInfo.validateBasicErr != nil && mode != execModeReCheck {
+		return sdk.GasInfo{}, nil, nil, runtimeInfo.validateBasicErr
+	}
+	if runtimeInfo.routeErr != nil {
+		return sdk.GasInfo{}, nil, nil, runtimeInfo.routeErr
+	}
 
 	if app.anteHandler != nil {
 		var (
@@ -1099,11 +1327,12 @@ func (app *BaseApp) runTxWithMultiStore(
 	// and we're in DeliverTx. Note, runMsgs will never return a reference to a
 	// Result if any single message fails or does not have a registered Handler.
 	tGetMsgsV2 := time.Now()
-	msgsV2, err := tx.GetMsgsV2()
-	app.observeCheckTxRunTxSubstep(mode, "get_msgs_v2", tGetMsgsV2)
-	if err == nil {
+	if runtimeInfo.msgsV2Err != nil {
+		err = runtimeInfo.msgsV2Err
+	} else {
+		app.observeCheckTxRunTxSubstep(mode, "get_msgs_v2", tGetMsgsV2)
 		tMsgsStart := time.Now()
-		result, err = app.runMsgs(runMsgCtx, msgs, msgsV2, mode)
+		result, err = app.runMsgs(runMsgCtx, runtimeInfo, mode)
 		app.observeCheckTxRunTxSubstep(mode, "run_msgs", tMsgsStart)
 		if mode == execModeFinalize {
 			blockTxMsgsMs += float64(time.Since(tMsgsStart).Nanoseconds()) / 1e6
@@ -1153,34 +1382,32 @@ func (app *BaseApp) runTxWithMultiStore(
 	return gInfo, result, anteEvents, err
 }
 
-// runMsgs iterates through a list of messages and executes them with the provided
-// Context and execution mode. Messages will only be executed during simulation
-// and DeliverTx. An error is returned if any single message fails or if a
-// Handler does not exist for a given message route. Otherwise, a reference to a
-// Result is returned. The caller must not commit state if an error is returned.
-func (app *BaseApp) runMsgs(ctx sdk.Context, msgs []sdk.Msg, msgsV2 []protov2.Message, mode execMode) (*sdk.Result, error) {
-	events := sdk.EmptyEvents()
-	var msgResponses []*codectypes.Any
+// runMsgs iterates through transaction runtime message info and executes each
+// message with the provided Context and execution mode. Messages will only be
+// executed during simulation and DeliverTx. The caller must not commit state if
+// an error is returned.
+func (app *BaseApp) runMsgs(ctx sdk.Context, txInfo *txRuntimeInfo, mode execMode) (*sdk.Result, error) {
+	events := make(sdk.Events, 0, len(txInfo.msgInfos)*4)
+	msgResponses := make([]*codectypes.Any, 0, len(txInfo.msgInfos))
 
 	// NOTE: GasWanted is determined by the AnteHandler and GasUsed by the GasMeter.
-	for i, msg := range msgs {
+	for i, msgInfo := range txInfo.msgInfos {
 		if mode != execModeFinalize && mode != execModeSimulate {
 			break
 		}
 
-		handler := app.msgServiceRouter.Handler(msg)
+		handler := msgInfo.handler
 		if handler == nil {
-			return nil, errorsmod.Wrapf(sdkerrors.ErrUnknownRequest, "no message handler found for %T", msg)
+			return nil, errorsmod.Wrapf(sdkerrors.ErrUnknownRequest, "no message handler found for %T", msgInfo.msg)
 		}
 
 		// ADR 031 request type routing
-		msgResult, err := handler(ctx, msg)
+		msgResult, err := handler(ctx, msgInfo.msg)
 		if err != nil {
 			return nil, errorsmod.Wrapf(err, "failed to execute message; message index: %d", i)
 		}
 
-		// create message events
-		msgEvents, err := createEvents(app.cdc, msgResult.GetEvents(), msg, msgsV2[i])
+		msgEvents, err := createEvents(app.cdc, msgResult.GetEvents(), msgInfo)
 		if err != nil {
 			return nil, errorsmod.Wrapf(err, "failed to create message events; message index: %d", i)
 		}
@@ -1204,11 +1431,10 @@ func (app *BaseApp) runMsgs(ctx sdk.Context, msgs []sdk.Msg, msgsV2 []protov2.Me
 		if len(msgResult.MsgResponses) > 0 {
 			msgResponse := msgResult.MsgResponses[0]
 			if msgResponse == nil {
-				return nil, sdkerrors.ErrLogic.Wrapf("got nil Msg response at index %d for msg %s", i, sdk.MsgTypeURL(msg))
+				return nil, sdkerrors.ErrLogic.Wrapf("got nil Msg response at index %d for msg %s", i, msgInfo.typeURL)
 			}
 			msgResponses = append(msgResponses, msgResponse)
 		}
-
 	}
 
 	data, err := makeABCIData(msgResponses)
@@ -1216,11 +1442,15 @@ func (app *BaseApp) runMsgs(ctx sdk.Context, msgs []sdk.Msg, msgsV2 []protov2.Me
 		return nil, errorsmod.Wrap(err, "failed to marshal tx data")
 	}
 
-	return &sdk.Result{
+	abciEvents := events.ToABCIEvents()
+
+	result := &sdk.Result{
 		Data:         data,
-		Events:       events.ToABCIEvents(),
+		Events:       abciEvents,
 		MsgResponses: msgResponses,
-	}, nil
+	}
+
+	return result, nil
 }
 
 // makeABCIData generates the Data field to be sent to ABCI Check/DeliverTx.
@@ -1228,31 +1458,44 @@ func makeABCIData(msgResponses []*codectypes.Any) ([]byte, error) {
 	return proto.Marshal(&sdk.TxMsgData{MsgResponses: msgResponses})
 }
 
-func createEvents(cdc codec.Codec, events sdk.Events, msg sdk.Msg, msgV2 protov2.Message) (sdk.Events, error) {
-	eventMsgName := sdk.MsgTypeURL(msg)
-	msgEvent := sdk.NewEvent(sdk.EventTypeMessage, sdk.NewAttribute(sdk.AttributeKeyAction, eventMsgName))
+func createEvents(cdc codec.Codec, events sdk.Events, msgInfo msgRuntimeInfo) (sdk.Events, error) {
+	msgEvent := sdk.NewEvent(sdk.EventTypeMessage, sdk.NewAttribute(sdk.AttributeKeyAction, msgInfo.typeURL))
 
 	// we set the signer attribute as the sender
-	signers, err := cdc.GetMsgV2Signers(msgV2)
-	if err != nil {
-		return nil, err
-	}
-	if len(signers) > 0 && signers[0] != nil {
-		addrStr, err := cdc.InterfaceRegistry().SigningContext().AddressCodec().BytesToString(signers[0])
+	if msgInfo.signersReady {
+		if msgInfo.signerErr != nil {
+			return nil, msgInfo.signerErr
+		}
+		if msgInfo.senderErr != nil {
+			return nil, msgInfo.senderErr
+		}
+		if msgInfo.sender != "" {
+			msgEvent = msgEvent.AppendAttributes(sdk.NewAttribute(sdk.AttributeKeySender, msgInfo.sender))
+		}
+	} else {
+		signers, err := cdc.GetMsgV2Signers(msgInfo.msgV2)
 		if err != nil {
 			return nil, err
 		}
-		msgEvent = msgEvent.AppendAttributes(sdk.NewAttribute(sdk.AttributeKeySender, addrStr))
+		if len(signers) > 0 && signers[0] != nil {
+			addrStr, err := cdc.InterfaceRegistry().SigningContext().AddressCodec().BytesToString(signers[0])
+			if err != nil {
+				return nil, err
+			}
+			msgEvent = msgEvent.AppendAttributes(sdk.NewAttribute(sdk.AttributeKeySender, addrStr))
+		}
 	}
 
 	// verify that events have no module attribute set
 	if _, found := events.GetAttributes(sdk.AttributeKeyModule); !found {
-		if moduleName := sdk.GetModuleNameFromTypeURL(eventMsgName); moduleName != "" {
-			msgEvent = msgEvent.AppendAttributes(sdk.NewAttribute(sdk.AttributeKeyModule, moduleName))
+		if msgInfo.moduleName != "" {
+			msgEvent = msgEvent.AppendAttributes(sdk.NewAttribute(sdk.AttributeKeyModule, msgInfo.moduleName))
 		}
 	}
 
-	return sdk.Events{msgEvent}.AppendEvents(events), nil
+	msgEvents := sdk.Events{msgEvent}.AppendEvents(events)
+
+	return msgEvents, nil
 }
 
 // PrepareProposalVerifyTx performs transaction verification when a proposer is
