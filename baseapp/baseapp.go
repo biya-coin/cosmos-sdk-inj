@@ -1295,7 +1295,10 @@ func (app *BaseApp) runTxWithMultiStore(
 
 	if mode == execModeCheck {
 		tMempoolInsert := time.Now()
-		err = app.mempool.Insert(ctx, tx)
+		mempoolCtx := ctx.WithContext(context.WithValue(ctx.Context(), "github.com/skip-mev/block-sdk/v2/block/inserttrace.recorder", func(step string, duration time.Duration) {
+			app.perfMetrics.CheckTxRunTxSubstepSeconds.With("step", "mempool_insert."+step).Observe(duration.Seconds())
+		}))
+		err = app.mempool.Insert(mempoolCtx, tx)
 		app.observeCheckTxRunTxSubstep(mode, "mempool_insert", tMempoolInsert)
 		if err != nil {
 			return gInfo, nil, anteEvents, err
